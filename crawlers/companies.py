@@ -17,7 +17,7 @@ OD = "https://opendata.gov.mn/api/v1"
 BURTGEL = "https://opendata.burtgel.gov.mn"
 REGISTRY_TITLE = "Хуулийн этгээдийн улсын бүртгэлийн нээлттэй өгөгдөл"
 XLSX = {"barred_suppliers": "оролцох эрхээ хязгаарлуулсан", "tender_complaints": "гомдлын шийдвэрлэлт"}
-KEYS = {"od_catalog": ["id"], "liquidated": ["reg_no"], "removed": ["row"]}
+KEYS = {"od_catalog": ["id"], "companies": ["Регистрийн дугаар"], "liquidated": ["reg_no"], "removed": ["row"]}
 http = Http(rate=2.0, timeout=600)
 
 
