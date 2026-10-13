@@ -4,6 +4,7 @@
 - the whole dataset catalogue
 plus the liquidated / removed entity lists of the registration authority (opendata.burtgel.gov.mn)."""
 import io
+import json
 import os
 import re
 
@@ -38,6 +39,23 @@ def newest_file(item, ext):
     return max(files, key=lambda f: f.get("created_at") or "") if files else None
 
 
+def header_names(path):
+    """Field names from the dump's Header (a list of names, or of {name/title/...} objects)."""
+    with open(path, "rb") as fh:
+        try:
+            header = next(ijson.items(fh, "Header", use_float=True), None)
+        except ijson.IncompleteJSONError:
+            header = None
+    if isinstance(header, dict):
+        header = next((v for v in header.values() if isinstance(v, list)), list(header))
+    out = []
+    for h in header or []:
+        if isinstance(h, dict):
+            h = next((h[k] for k in ("name", "field", "key", "title", "label", "code") if k in h), json.dumps(h, ensure_ascii=False))
+        out.append(str(h))
+    return out
+
+
 def crawl(ctx):
     items = catalog(ctx)
     for it in items:
@@ -63,9 +81,13 @@ def crawl(ctx):
     if not ctx.sample and f.get("size") and size != f["size"]:
         raise RuntimeError(f"registry download incomplete: {size} of {f['size']} bytes")
     n = 0
+    names = header_names(path)
+    log(f"registry header: {len(names)} fields: {names}")
     try:
         with open(path, "rb") as fh:
             for rec in ijson.items(fh, "Data.item", use_float=True):
+                if isinstance(rec, list):  # rows are arrays; column names come from the Header
+                    rec = {(names[i] if i < len(names) else f"c{i}"): v for i, v in enumerate(rec)}
                 ctx.write("companies", flat(rec))
                 n += 1
                 if ctx.sample and n >= 3:
