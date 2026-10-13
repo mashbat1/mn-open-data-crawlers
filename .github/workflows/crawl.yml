@@ -1,0 +1,54 @@
+name: crawl
+# One source per run. Long crawls stop before the 6 h job limit, save their state to the private data repo and
+# start the next run themselves. `sample` makes a few requests per stage and stores nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        required: true
+        type: choice
+        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac]
+      sample:
+        type: boolean
+        default: false
+
+concurrency:
+  group: crawl-${{ inputs.source }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      SRC: ${{ inputs.source }}
+      DATA_REPO: mashbat1/gov-crawler
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore state
+        if: ${{ !inputs.sample }}
+        env:
+          GH_TOKEN: ${{ secrets.DATA_TOKEN }}
+        run: python ci.py restore "$SRC"
+      - name: Crawl
+        run: python run.py "$SRC" ${{ inputs.sample && '--sample --budget-min 15' || '--budget-min 315' }}
+      - name: Save to the data repo
+        if: ${{ !inputs.sample && always() }}
+        env:
+          GH_TOKEN: ${{ secrets.DATA_TOKEN }}
+        run: python ci.py save "$SRC"
+      - name: Continue in a new run
+        if: ${{ !inputs.sample && hashFiles('work/CONTINUE') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run crawl.yml -R "$GITHUB_REPOSITORY" -f source="$SRC"

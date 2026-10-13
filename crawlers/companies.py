@@ -1,0 +1,120 @@
+"""Legal-entity registry and procurement lists from the national open-data portal (opendata.gov.mn):
+- the daily full dump of the legal-entity register (founders/shareholders, directors, beneficial owners)
+- Ministry of Finance: suppliers barred from tenders, tender-complaint decisions
+- the whole dataset catalogue
+plus the liquidated / removed entity lists of the registration authority (opendata.burtgel.gov.mn)."""
+import io
+import os
+import re
+
+import ijson
+import openpyxl
+
+from .core import Http, flat, log, strip_tags
+
+OD = "https://opendata.gov.mn/api/v1"
+BURTGEL = "https://opendata.burtgel.gov.mn"
+REGISTRY_TITLE = "Хуулийн этгээдийн улсын бүртгэлийн нээлттэй өгөгдөл"
+XLSX = {"barred_suppliers": "оролцох эрхээ хязгаарлуулсан", "tender_complaints": "гомдлын шийдвэрлэлт"}
+KEYS = {"od_catalog": ["id"], "liquidated": ["reg_no"], "removed": ["row"]}
+http = Http(rate=2.0, timeout=600)
+
+
+def catalog(ctx):
+    page, items = 1, []
+    while True:
+        o = http.json(f"{OD}/front/search", method="POST",
+                      json={"page": {"page": page, "page_size": 500, "sort": "created_at DESC"}})
+        d = o["result"]["details"]
+        items += d["items"]
+        ctx.expect("od_catalog", d["total_rows"])
+        if ctx.sample or page >= d["total_pages"]:
+            return items
+        page += 1
+
+
+def newest_file(item, ext):
+    files = [f for f in item.get("files") or [] if (f.get("ext") or "").lower() == ext]
+    return max(files, key=lambda f: f.get("created_at") or "") if files else None
+
+
+def crawl(ctx):
+    items = catalog(ctx)
+    for it in items:
+        ctx.write("od_catalog", flat(it))
+    log(f"catalogue: {len(items)} datasets")
+
+    # registry dump (~460 MB JSON), streamed
+    reg = [it for it in items if REGISTRY_TITLE in (it.get("name") or "")]
+    if not reg and ctx.sample:
+        o = http.json(f"{OD}/front/search", method="POST",
+                      json={"page": {"page": 1, "page_size": 50, "sort": "created_at DESC"}, "query": REGISTRY_TITLE})
+        reg = [it for it in o["result"]["details"]["items"] if REGISTRY_TITLE in (it.get("name") or "")]
+    f = newest_file(max(reg, key=lambda it: it.get("updated_at") or ""), "json") if reg else None
+    if not f:
+        raise RuntimeError("registry dataset not found in the catalogue")
+    path = os.path.join(ctx.workdir, "registry.json")
+    with http.get(f"{OD}/media/{f['path']}", stream=True, timeout=1800) as r, open(path, "wb") as out:
+        for chunk in r.iter_content(1 << 20):
+            out.write(chunk)
+            if ctx.sample and out.tell() > 5_000_000:
+                break
+    size = os.path.getsize(path)
+    if not ctx.sample and f.get("size") and size != f["size"]:
+        raise RuntimeError(f"registry download incomplete: {size} of {f['size']} bytes")
+    n = 0
+    try:
+        with open(path, "rb") as fh:
+            for rec in ijson.items(fh, "Data.item", use_float=True):
+                ctx.write("companies", flat(rec))
+                n += 1
+                if ctx.sample and n >= 3:
+                    break
+    except ijson.IncompleteJSONError:
+        if not ctx.sample:
+            raise
+    os.remove(path)
+    ctx.expect("companies_file_bytes", size)
+    ctx.state["registry_file"] = {"path": f["path"], "created_at": f.get("created_at"), "rows": n}
+    log(f"registry: {n} legal entities")
+
+    # Ministry of Finance spreadsheets
+    for table, needle in XLSX.items():
+        cands = [it for it in items if needle in (it.get("name") or "").lower() or needle in (it.get("name") or "")]
+        fx = newest_file(max(cands, key=lambda it: it.get("updated_at") or ""), "xlsx") if cands else None
+        if not fx:
+            log(f"{table}: dataset not found")
+            continue
+        wb = openpyxl.load_workbook(io.BytesIO(http.get(f"{OD}/media/{fx['path']}").content), read_only=True, data_only=True)
+        for ws in wb.worksheets:
+            rows = list(ws.iter_rows(values_only=True))
+            hdr_i = next((i for i, r in enumerate(rows) if sum(1 for c in r if c not in (None, "")) >= 3), None)
+            if hdr_i is None:
+                continue
+            hdr = [str(c or f"col{j}").strip() for j, c in enumerate(rows[hdr_i])]
+            for r in rows[hdr_i + 1:]:
+                if any(c not in (None, "") for c in r):
+                    ctx.write(table, {"sheet": ws.title, **{hdr[j]: (str(c) if c is not None else None)
+                                                            for j, c in enumerate(r) if j < len(hdr)}})
+
+    # liquidated entities (DataTables JSON)
+    start, total = 0, None
+    while total is None or start < total:
+        o = http.json(f"{BURTGEL}/les/table", params={"draw": 1, "start": start, "length": 1000})
+        total = o.get("recordsTotal") or 0
+        ctx.expect("liquidated", total)
+        for row in o.get("data") or []:
+            vals = [strip_tags(str(c)) for c in row]
+            ctx.write("liquidated", {"reg_no": vals[0] if vals else None, "name": vals[1] if len(vals) > 1 else None,
+                                     "legal_form": vals[2] if len(vals) > 2 else None,
+                                     "liquidated_on": vals[3] if len(vals) > 3 else None})
+        if ctx.sample:
+            break
+        start += 1000
+    # removed from the register (HTML table)
+    html = http.get(f"{BURTGEL}/lescanceled").text
+    for i, tr in enumerate(re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S)):
+        tds = [strip_tags(td) for td in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+        if tds:
+            ctx.write("removed", {"row": i, **{f"c{j}": v for j, v in enumerate(tds)}})
+    return True

@@ -1,0 +1,22 @@
+name: crawl-all
+# Starts every source at once (each is a different server, so running them in parallel loads no site more).
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for s in parliament xacxom legalinfo shuukh companies sanctions egazar iaac; do
+            gh workflow run crawl.yml -R "$GITHUB_REPOSITORY" -f source=$s -f sample=${{ inputs.sample }}
+          done
