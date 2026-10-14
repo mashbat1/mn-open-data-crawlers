@@ -47,16 +47,21 @@ def crawl(ctx):
         ctx.expect(f"opensanctions:{name}", kept)
         ctx.state.setdefault("versions", {})[name] = d.get("last_export")
         log(f"{name}: {kept} kept of {n}")
-    # one big page first (avoids unstable offset paging), then offset pages for anything it did not return
-    seen = {}
-    o = http.json(ADB, params={"size": 5000, "offset": 0})
+    # the largest page size the API accepts, then offset pages; duplicates across pages are dropped
+    seen, batches, size, o = {}, [], None, None
+    for size in (1000, 500, 200, 100):
+        try:
+            o = http.json(ADB, params={"size": size, "offset": 0})
+            break
+        except Exception:  # noqa: BLE001 - 400 for sizes above the limit
+            continue
     total = (o.get("meta") or {}).get("totalItems") or 0
     ctx.expect("adb", total)
-    batches = [first_list(o)]
-    offset = 0
-    while not ctx.sample and len({str(r.get("id")) for b in batches for r in b}) < total and offset < total:
-        batches.append(first_list(http.json(ADB, params={"size": 100, "offset": offset})))
-        offset += 100
+    batches.append(first_list(o))
+    offset = len(batches[0])
+    while not ctx.sample and batches[-1] and offset < total + size:
+        batches.append(first_list(http.json(ADB, params={"size": size, "offset": offset})))
+        offset += size
     for b in batches:
         for r in b:
             rid = str(r.get("id") or json.dumps(r, sort_keys=True))
