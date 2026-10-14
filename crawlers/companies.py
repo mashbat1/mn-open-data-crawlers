@@ -17,7 +17,7 @@ OD = "https://opendata.gov.mn/api/v1"
 BURTGEL = "https://opendata.burtgel.gov.mn"
 REGISTRY_TITLE = "Хуулийн этгээдийн улсын бүртгэлийн нээлттэй өгөгдөл"
 XLSX = {"barred_suppliers": "оролцох эрхээ хязгаарлуулсан", "tender_complaints": "гомдлын шийдвэрлэлт"}
-KEYS = {"od_catalog": ["id"], "companies": ["Регистрийн дугаар"], "liquidated": ["reg_no"], "removed": ["row"]}
+KEYS = {"od_catalog": ["id"], "companies": ["Регистрийн дугаар"], "liquidated": ["reg_no"]}
 http = Http(rate=2.0, timeout=600)
 
 
@@ -133,10 +133,19 @@ def crawl(ctx):
         if ctx.sample:
             break
         start += 1000
-    # removed from the register (HTML table)
-    html = http.get(f"{BURTGEL}/lescanceled").text
-    for i, tr in enumerate(re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S)):
-        tds = [strip_tags(td) for td in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
-        if tds:
-            ctx.write("removed", {"row": i, **{f"c{j}": v for j, v in enumerate(tds)}})
+    # removed from the register (HTML table, ?page=N)
+    page, prev = 1, None
+    while True:
+        html = http.get(f"{BURTGEL}/lescanceled", params={"text": "", "page": page}).text
+        rows = [[strip_tags(td) for td in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+                for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S)]
+        rows = [r for r in rows if r]
+        if not rows or rows == prev or page > 2000:
+            break
+        for r in rows:
+            ctx.write("removed", {f"c{j}": v for j, v in enumerate(r)})
+        if ctx.sample:
+            break
+        prev, page = rows, page + 1
+    log(f"removed: {page - 1} pages")
     return True

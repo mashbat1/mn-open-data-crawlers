@@ -6,7 +6,7 @@ DRAFTS = "https://api-d.parliament.mn/tusul/tusulList"
 DRAFTS_APP = "56cc90a2-83a0-4e1f-994d-7fdebfdfbf68"      # public app id from the site's bundle
 DRAFTS_PARENT = "6101970e-2fb0-4394-8113-db13d7374fb6"
 KEYS = {"sessions": ["key"], "members": ["id"], "member_details": ["id"], "polls": ["id"], "votes": ["member_id", "pollId"],
-        "meetings": ["id"], "agendas": ["id"], "bills": ["id"], "law_archives": ["id"], "units": ["id"],
+        "meetings": ["id"], "meeting_index": ["id"], "agendas": ["id"], "bills": ["id"], "law_archives": ["id"], "units": ["id"],
         "member_drafts": ["member_id", "id"], "d_drafts": ["id"]}
 http = Http(rate=1.5, timeout=90)
 
@@ -50,6 +50,9 @@ def crawl(ctx):
         n = 0
         for o, rows in pages(f"{BASE}/meeting/public-polls/", sample=ctx.sample):
             ctx.expect("polls", o.get("count"))
+            if n == 0:  # the full meeting index (the meetings endpoint itself only lists the current session)
+                for m in (o.get("filter_options") or {}).get("meetings") or []:
+                    ctx.write("meeting_index", flat(m))
             for r in rows:
                 ctx.write("polls", flat(r))
                 n += 1
