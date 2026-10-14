@@ -43,6 +43,10 @@ if a.sample:
         log(f"  expect {k} = {v}")
 result = {"complete": ctx.state["complete"], "crashed": crashed, "rows": rows, "runs": ctx.state["runs"]}
 json.dump(result, open(os.path.join(a.workdir, "result.json"), "w"))
-if not a.sample and not ctx.state["complete"] and ctx.state["runs"] < MAX_RUNS:
+# a crash that repeats the previous run's crash is deterministic: stop instead of looping
+repeat = crashed and crashed == ctx.state.get("last_crash")
+ctx.state["last_crash"] = crashed
+ctx.save()
+if not a.sample and not ctx.state["complete"] and ctx.state["runs"] < MAX_RUNS and not repeat:
     open(os.path.join(a.workdir, "CONTINUE"), "w").close()
 sys.exit(1 if (a.sample and crashed) else 0)
