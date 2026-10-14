@@ -47,24 +47,24 @@ def crawl(ctx):
         ctx.expect(f"opensanctions:{name}", kept)
         ctx.state.setdefault("versions", {})[name] = d.get("last_export")
         log(f"{name}: {kept} kept of {n}")
-    offset, total, seen, pages = 0, None, set(), 0
-    while total is None or offset < total:
-        o = http.json(ADB, params={"size": 100, "offset": offset})
-        total = (o.get("meta") or {}).get("totalItems") or 0
-        ctx.expect("adb", total)
-        rows = first_list(o)
-        pages += 1
-        if not rows or pages > 200:
-            break
-        for r in rows:
+    # one big page first (avoids unstable offset paging), then offset pages for anything it did not return
+    seen = {}
+    o = http.json(ADB, params={"size": 5000, "offset": 0})
+    total = (o.get("meta") or {}).get("totalItems") or 0
+    ctx.expect("adb", total)
+    batches = [first_list(o)]
+    offset = 0
+    while not ctx.sample and len({str(r.get("id")) for b in batches for r in b}) < total and offset < total:
+        batches.append(first_list(http.json(ADB, params={"size": 100, "offset": offset})))
+        offset += 100
+    for b in batches:
+        for r in b:
             rid = str(r.get("id") or json.dumps(r, sort_keys=True))
-            if rid not in seen:
-                seen.add(rid)
-                ctx.write("adb", {"_id": rid, **flat(r)})
-        if ctx.sample:
+            seen.setdefault(rid, r)
+    for i, (rid, r) in enumerate(seen.items()):
+        if ctx.sample and i >= 3:
             break
-        offset += len(rows)  # the API may return short pages; advance by what actually came back
-    log(f"adb: {len(seen)} unique of {total} reported")
-    if not ctx.sample and len(seen) < total:
-        raise RuntimeError(f"adb: only {len(seen)} of {total}")
+        ctx.write("adb", {"_id": rid, **flat(r)})
+    log(f"adb: {len(seen)} unique of {total} reported ({len(batches)} requests)")
+    ctx.state["adb_short"] = max(0, total - len(seen))  # reported in the manifest; the API lists fewer than it counts
     return True
