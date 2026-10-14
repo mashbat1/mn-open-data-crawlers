@@ -1,7 +1,7 @@
 """Watch lists: OpenSanctions (CC BY-NC 4.0 — non-commercial use), World Bank debarments (via OpenSanctions),
 ADB sanctions (official API, CC BY 3.0 IGO). Large OpenSanctions files are streamed and filtered to Mongolia."""
 import csv
-import io
+import json
 
 from .core import Http, flat, log
 
@@ -9,7 +9,7 @@ OS_INDEX = "https://data.opensanctions.org/datasets/latest/index.json"
 FULL = ("mn_parliament", "worldbank_debarred", "adb_sanctions")
 MN_FILTERED = ("default",)        # 'default' already contains peps + sanctions; keep only rows linked to Mongolia
 ADB = "https://apim.adb.org/sanctions/lists/v1/published-list"
-KEYS = {"opensanctions": ["dataset", "id"], "adb": ["_row"]}
+KEYS = {"opensanctions": ["dataset", "id"], "adb": ["_id"]}
 http = Http(rate=2.0, timeout=1800)
 csv.field_size_limit(1 << 26)
 
@@ -47,19 +47,24 @@ def crawl(ctx):
         ctx.expect(f"opensanctions:{name}", kept)
         ctx.state.setdefault("versions", {})[name] = d.get("last_export")
         log(f"{name}: {kept} kept of {n}")
-    offset, total, i = 0, None, 0
+    offset, total, seen, pages = 0, None, set(), 0
     while total is None or offset < total:
         o = http.json(ADB, params={"size": 100, "offset": offset})
         total = (o.get("meta") or {}).get("totalItems") or 0
         ctx.expect("adb", total)
         rows = first_list(o)
-        if not rows:
+        pages += 1
+        if not rows or pages > 200:
             break
         for r in rows:
-            ctx.write("adb", {"_row": i, **flat(r)})
-            i += 1
+            rid = str(r.get("id") or json.dumps(r, sort_keys=True))
+            if rid not in seen:
+                seen.add(rid)
+                ctx.write("adb", {"_id": rid, **flat(r)})
         if ctx.sample:
             break
-        offset += 100
-    log(f"adb: {i} of {total}")
+        offset += len(rows)  # the API may return short pages; advance by what actually came back
+    log(f"adb: {len(seen)} unique of {total} reported")
+    if not ctx.sample and len(seen) < total:
+        raise RuntimeError(f"adb: only {len(seen)} of {total}")
     return True
