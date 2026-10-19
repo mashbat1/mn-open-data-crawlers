@@ -76,10 +76,13 @@ def crawl(ctx):
         if unid:
             o = http.post(f"{BASE}/lawConnectedTypeData", data={"dvid": unid.group(1), "type": 2, "lawId": law_id}).json()
             h = o.get("Html") if isinstance(o, dict) else str(o)
-            for lid, t in re.findall(r'lawId=(\d+)[^>]*>(.*?)</a>', h or "", re.S):
-                if lid != law_id:
-                    ctx.write("links", {"law_id": law_id, "linked_law_id": lid, "relation": "amended_by",
-                                        "title": strip_tags(t)})
+            for block in re.split(r'(?=data-id=")', h or "")[1:]:
+                m = re.search(r"getViewLaw\(this,\s*'(\d+)'\)[^>]*>(.*?)</a>", block, re.S)
+                if not m or m.group(1) == law_id:
+                    continue
+                d = re.search(r"(\d{4}-\d{2}-\d{2})", block)
+                ctx.write("links", {"law_id": law_id, "linked_law_id": m.group(1), "relation": "amended_by",
+                                    "title": strip_tags(m.group(2)), "date": d.group(1) if d else None})
 
     complete &= ctx.run_items("detail", sorted(st["law_ids"]), detail, workers=4)
     return complete

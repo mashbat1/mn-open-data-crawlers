@@ -7,7 +7,7 @@ on:
       source:
         required: true
         type: choice
-        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac]
+        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports]
       sample:
         type: boolean
         default: false
@@ -41,6 +41,8 @@ jobs:
           GH_TOKEN: ${{ secrets.DATA_TOKEN }}
         run: python ci.py restore "$SRC"
       - name: Crawl
+        env:
+          GH_TOKEN: ${{ secrets.DATA_TOKEN }}
         run: python run.py "$SRC" ${{ inputs.sample && '--sample --budget-min 15' || '--budget-min 315' }}
       - name: Save to the data repo
         if: ${{ !inputs.sample && always() }}

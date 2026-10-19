@@ -17,6 +17,6 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for s in parliament xacxom legalinfo shuukh companies sanctions egazar iaac; do
+          for s in parliament xacxom legalinfo shuukh companies sanctions egazar iaac shilendans_eza shilendans_od shilendans_reports; do
             gh workflow run crawl.yml -R "$GITHUB_REPOSITORY" -f source=$s -f sample=${{ inputs.sample }}
           done

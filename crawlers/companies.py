@@ -100,24 +100,38 @@ def crawl(ctx):
     ctx.state["registry_file"] = {"path": f["path"], "created_at": f.get("created_at"), "rows": n}
     log(f"registry: {n} legal entities")
 
-    # Ministry of Finance spreadsheets
-    for table, needle in XLSX.items():
-        cands = [it for it in items if needle in (it.get("name") or "").lower() or needle in (it.get("name") or "")]
-        fx = newest_file(max(cands, key=lambda it: it.get("updated_at") or ""), "xlsx") if cands else None
-        if not fx:
-            log(f"{table}: dataset not found")
-            continue
-        wb = openpyxl.load_workbook(io.BytesIO(http.get(f"{OD}/media/{fx['path']}").content), read_only=True, data_only=True)
-        for ws in wb.worksheets:
-            rows = list(ws.iter_rows(values_only=True))
-            hdr_i = next((i for i, r in enumerate(rows) if sum(1 for c in r if c not in (None, "")) >= 3), None)
-            if hdr_i is None:
+    # Ministry of Finance spreadsheets: every published file (complaints come as monthly files), rows deduplicated
+    XLSX_ALL = {"barred_suppliers": r"оролцох эрхээ хязгаарлуулсан", "tender_complaints": r"гомдлын"}
+    for table, needle in XLSX_ALL.items():
+        files = []
+        for it in items:
+            name = (it.get("name") or "").lower()
+            if re.search(needle, name) and ("тендер" in name or table == "barred_suppliers"):
+                files += [(it.get("name"), f) for f in it.get("files") or [] if (f.get("ext") or "").lower() in ("xlsx", "xls")]
+        seen = set()
+        for title, fx in files:
+            try:
+                wb = openpyxl.load_workbook(io.BytesIO(http.get(f"{OD}/media/{fx['path']}").content), read_only=True, data_only=True)
+            except Exception as e:  # noqa: BLE001 - one unreadable file must not stop the rest
+                log(f"{table}: {fx.get('path')} unreadable ({type(e).__name__})")
                 continue
-            hdr = [str(c or f"col{j}").strip() for j, c in enumerate(rows[hdr_i])]
-            for r in rows[hdr_i + 1:]:
-                if any(c not in (None, "") for c in r):
-                    ctx.write(table, {"sheet": ws.title, **{hdr[j]: (str(c) if c is not None else None)
-                                                            for j, c in enumerate(r) if j < len(hdr)}})
+            for ws in wb.worksheets:
+                rows = list(ws.iter_rows(values_only=True))
+                hdr_i = next((i for i, r in enumerate(rows) if sum(1 for c in r if c not in (None, "")) >= 3), None)
+                if hdr_i is None:
+                    continue
+                hdr = [str(c or f"col{j}").strip() for j, c in enumerate(rows[hdr_i])]
+                for r in rows[hdr_i + 1:]:
+                    if not any(c not in (None, "") for c in r):
+                        continue
+                    rec = {hdr[j]: (str(c) if c is not None else None) for j, c in enumerate(r) if j < len(hdr)}
+                    key = json.dumps({k: v for k, v in rec.items() if k not in ("№", "No", "Д/д")}, ensure_ascii=False, sort_keys=True)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    ctx.write(table, {"source_file": title, "sheet": ws.title, **rec})
+        ctx.expect(f"{table}_files", len(files))
+        log(f"{table}: {len(files)} files, {len(seen)} unique rows")
 
     # liquidated entities (DataTables JSON)
     start, total = 0, None

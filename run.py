@@ -9,7 +9,8 @@ import sys
 
 from crawlers.core import Ctx, log
 
-SOURCES = ["parliament", "xacxom", "legalinfo", "shuukh", "companies", "sanctions", "egazar", "iaac"]
+SOURCES = ["parliament", "xacxom", "legalinfo", "shuukh", "companies", "sanctions", "egazar", "iaac",
+           "shilendans_eza", "shilendans_od", "shilendans_reports"]
 MAX_RUNS = 15
 
 ap = argparse.ArgumentParser()
