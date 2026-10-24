@@ -1,0 +1,26 @@
+name: repair-od
+on:
+  workflow_dispatch:
+    inputs:
+      base_tag:
+        required: true
+        default: shilendans_od-2026-10-24
+permissions:
+  contents: read
+concurrency:
+  group: crawl-shilendans_od
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.DATA_TOKEN }}
+      BASE_TAG: ${{ inputs.base_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python repair_od.py "$BASE_TAG"
