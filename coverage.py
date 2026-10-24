@@ -23,7 +23,7 @@ def assess(manifest):
         expected = manifest.get('server_reported', {}).get(name)
         if isinstance(expected, int) and table['rows'] != expected:
             mismatches[name] = {'expected': expected, 'stored': table['rows']}
-    return {'status': 'needs_attention' if failed or mismatches else 'published',
+    return {'status': 'needs_attention' if failed or mismatches else ('published' if manifest.get('tables') else 'unverified'),
             'tables': {k: v['rows'] for k, v in manifest.get('tables', {}).items()},
             'failed_items': failed, 'count_mismatches': mismatches,
             'coverage_scope': manifest.get('coverage_scope'), 'crawled': manifest.get('crawled')}
@@ -65,10 +65,22 @@ def main():
     result['all_sources_published'] = all(s['status'] == 'published' for s in result['sources'].values())
     target = folder / 'coverage.json'
     target.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+    was_ready = False
     if gh('release', 'view', 'crawl-status', check=False).returncode:
         gh('release', 'create', 'crawl-status', '--title', 'Data collection status', '--notes',
            'Collection status and unresolved counts. No attachments, analysis or deployment.', '--prerelease', '--latest=false')
+    else:
+        previous = folder / 'previous'
+        previous.mkdir(exist_ok=True)
+        old = gh('release', 'download', 'crawl-status', '-p', 'coverage.json', '-D', str(previous), '--clobber', check=False)
+        if old.returncode == 0:
+            was_ready = json.loads((previous / 'coverage.json').read_text(encoding='utf-8')).get('all_sources_published') is True
     gh('release', 'upload', 'crawl-status', str(target), '--clobber')
+    if result['all_sources_published'] and not was_ready:
+        # Repository dispatch needs only the existing data token's Contents write
+        # permission. Build/deploy resumes only after the requested collection gate.
+        subprocess.run(['gh', 'api', f'repos/{REPO}/dispatches', '-X', 'POST',
+                        '-f', 'event_type=data-collection-ready'], check=True)
     print(json.dumps({'all_sources_published': result['all_sources_published'],
                       'sources': {s: e['status'] for s, e in result['sources'].items()}}))
 
