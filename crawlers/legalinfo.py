@@ -10,7 +10,7 @@ KEYS = {"acts": ["law_id", "category", "active"], "texts": ["law_id"], "links": 
 CATEGORIES = range(27, 47)      # filtercategorytypeid; code = id - 26 (27/1 laws, 33/7 gov. resolutions ...)
 ACTIVE = (1, 0, 2)              # in force, repealed, suspended
 PAGE = 20
-http = Http(rate=3.0, timeout=120, headers={"X-Requested-With": "XMLHttpRequest"})
+http = Http(rate=3.0, timeout=45, retries=1, headers={"X-Requested-With": "XMLHttpRequest"})
 
 
 def list_page(cat, active, page, start=None, end=None, order="asc"):

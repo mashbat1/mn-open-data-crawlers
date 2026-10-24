@@ -40,6 +40,13 @@ class TimeBudgetExpired(Exception):
     pass
 
 
+def should_continue(state, time_up=False, crashed=None, repeat_crash=False, run_limit=100):
+    """Continue pauses and retryable work, not exhausted failures with zero work."""
+    return (not state.get("complete") and not repeat_crash
+            and state.get("resume_epoch_runs", 0) < run_limit
+            and bool(time_up or crashed or any(state.get("pending_retryable", {}).values())))
+
+
 class Http:
     """Thread-safe client: at most `rate` request starts per second across all threads, retries with backoff
     on 5xx / 429 / network errors, honours Retry-After."""
@@ -166,6 +173,8 @@ class Ctx:
         self.state.setdefault("expect", {})     # table/label -> number the server reports
         self.state.setdefault("stages_complete", [])
         self.state["runs"] = self.state.get("runs", 0) + 1
+        self.state["resume_epoch_runs"] = self.state.get("resume_epoch_runs", 0) + 1
+        self.state["pending_retryable"] = {}
         self._done_sets = {k: set(v) for k, v in self.state["done"].items()}
         self.sinks = {}
         self._save_lock = threading.Lock()
@@ -233,6 +242,7 @@ class Ctx:
         errors = self.state["errors"].setdefault(stage, {})
         items = list(items)
         todo = [it for it in items if str(key(it)) not in done and attempts.get(str(key(it)), 0) < MAX_ATTEMPTS]
+        todo.sort(key=lambda it: attempts.get(str(key(it)), 0))
         if self.sample:
             todo = todo[:3]
         log(f"{stage}: {len(todo)} to do ({len(done)} done before)")
@@ -267,6 +277,7 @@ class Ctx:
                 if time.monotonic() - self._last_save > 120:
                     self.save()
         remaining = [x for x in todo if str(key(x)) not in done and attempts.get(str(key(x)), 0) < MAX_ATTEMPTS]
+        self.state["pending_retryable"][stage] = len(remaining)
         log(f"{stage}: finished this run with {ok} ok, {fail} failed, {len(remaining)} remaining")
         self.save()
         return all(str(key(x)) in done for x in items)

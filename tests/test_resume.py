@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 import ci
-from crawlers.core import Ctx, MAX_ATTEMPTS
+from crawlers.core import Ctx, MAX_ATTEMPTS, should_continue
 from crawlers import eiti
 
 
@@ -19,6 +19,20 @@ class ResumeTests(unittest.TestCase):
             self.assertFalse(ctx.run_items("pages", ["bad"], called.append))
             self.assertEqual(called, [])
             self.assertEqual(ctx.state["errors"]["pages"], {"bad": "request failed"})
+            self.assertFalse(should_continue(ctx.state))
+
+    def test_budget_pause_can_resume_without_consuming_failure_retry(self):
+        self.assertTrue(should_continue({"complete": False}, time_up=True))
+        self.assertFalse(should_continue({"complete": True}, time_up=True))
+
+    def test_new_work_precedes_previously_failed_items(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = Ctx("cabinet", d)
+            ctx.state["attempts"]["pages"] = {"retry": 1}
+            ctx.state["errors"]["pages"] = {"retry": "old failure"}
+            calls = []
+            self.assertTrue(ctx.run_items("pages", ["retry", "fresh"], calls.append, workers=1))
+            self.assertEqual(calls, ["fresh", "retry"])
 
     def test_retry_clears_error_and_completes_generator(self):
         with tempfile.TemporaryDirectory() as d:

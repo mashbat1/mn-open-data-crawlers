@@ -81,7 +81,7 @@ def to_table(rows):
     return pa.table(arrays)
 
 
-def write_table(files, key_cols, path, chunk=200_000):
+def write_table(files, key_cols, path, chunk=200_000, keep=None):
     """Streams part files into one Parquet file without holding the table in memory (millions of rows killed the
     runner). Pass 1 fixes the schema from every row; pass 2 writes newest files first and drops older copies of the
     same key (later runs overwrite earlier ones)."""
@@ -89,7 +89,10 @@ def write_table(files, key_cols, path, chunk=200_000):
     for f in files:
         with gzip.open(f, "rt", encoding="utf-8") as fh:
             for line in fh:
-                for k, v in json.loads(line).items():
+                row = json.loads(line)
+                if keep is not None and not keep(row):
+                    continue
+                for k, v in row.items():
                     if v is not None:
                         kinds.setdefault(k, set()).add(type(v).__name__)
     cols = list(kinds)
@@ -115,6 +118,8 @@ def write_table(files, key_cols, path, chunk=200_000):
         with gzip.open(f, "rt", encoding="utf-8") as fh:
             for line in fh:
                 r = json.loads(line)
+                if keep is not None and not keep(r):
+                    continue
                 k = tuple(str(r.get(c)) for c in key_cols) if key_cols else hashlib.md5(line.encode()).digest()
                 if k in seen:
                     continue
@@ -130,7 +135,8 @@ def write_table(files, key_cols, path, chunk=200_000):
 
 def finalize(src):
     tag = f"wip-{src}"
-    keys = getattr(importlib.import_module(f"crawlers.{src}"), "KEYS", {})
+    source = importlib.import_module(f"crawlers.{src}")
+    keys = getattr(source, "KEYS", {})
     with open(os.path.join(WORK, "state.json"), encoding="utf-8") as fh:
         state = json.load(fh)
     if not state.get("complete") or any(state.get("errors", {}).values()):
@@ -151,7 +157,7 @@ def finalize(src):
                 "failed_examples": {k: dict(list(v.items())[:5]) for k, v in state.get("errors", {}).items() if v}}
     for table, files in by_table.items():
         path = os.path.join(out, f"{src}__{table}.parquet")
-        n = write_table(files, keys.get(table), path)
+        n = write_table(files, keys.get(table), path, keep=getattr(source, "ROW_FILTERS", {}).get(table))
         manifest["tables"][table] = {"rows": n, "bytes": os.path.getsize(path)}
         print(f"{table}: {n} rows, {os.path.getsize(path) / 1e6:.1f} MB")
         expected = state.get("expect", {}).get(table)
