@@ -7,7 +7,7 @@ on:
       source:
         required: true
         type: choice
-        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports, ebarimt, tender]
+        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports, ebarimt, eiti, tender]
       sample:
         type: boolean
         default: false

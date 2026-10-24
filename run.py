@@ -23,6 +23,9 @@ a = ap.parse_args()
 
 mod = importlib.import_module(f"crawlers.{a.source}")
 ctx = Ctx(a.source, a.workdir, sample=a.sample, budget_min=a.budget_min)
+if a.sample and getattr(mod, "http", None):
+    mod.http.timeout = min(mod.http.timeout, 30)
+    mod.http.retries = min(mod.http.retries, 2)
 complete, crashed = False, None
 try:
     complete = bool(mod.crawl(ctx))
