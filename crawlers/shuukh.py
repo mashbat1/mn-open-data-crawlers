@@ -27,16 +27,16 @@ def queries(sample=False):
     return out[-4:] if sample else out
 
 
-def params(cat, inst, zuil, year, page):
+def params(cat, inst, zuil, year, page, dr=None):
     p = [("id", inst), ("court_cat", cat), ("bb", 1), ("page", page),
-         ("daterange", f"{year}/01/01 - {year}/12/31"), ("court_order", 1), ("date_order", 1)]
+         ("daterange", dr or f"{year}/01/01 - {year}/12/31"), ("court_order", 1), ("date_order", 1)]
     for z in (CORRUPTION if zuil == "ch22" else [int(zuil)]):
         p.append(("zuil[]", z))
     return p
 
 
-def list_page(cat, inst, zuil, year, page):
-    o = http.get(f"{BASE}/site/case_ajax", params=params(cat, inst, zuil, year, page)).json()
+def list_page(cat, inst, zuil, year, page, dr=None):
+    o = http.get(f"{BASE}/site/case_ajax", params=params(cat, inst, zuil, year, page, dr)).json()
     rows = []
     for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", o.get("view") or "", re.S):
         m = re.search(r"/single_case/(\d+)", tr)
@@ -81,6 +81,45 @@ def crawl(ctx):
             st["cases"][f"{r['case_id']}:{inst}:{cat}"] = 1
 
     complete &= ctx.run_items("pages", pages, page, workers=1)
+
+    # Pages are not stably ordered: a few decisions can be skipped between page requests. Queries that come up
+    # short are re-read in date windows small enough for one page (10 rows).
+    by_query = st.setdefault("by_query", {})
+
+    def windows(qkey):
+        kind, cat, inst, zuil, y = qkey.split(":")
+        seen = by_query.setdefault(qkey, {})
+
+        def take(rows):
+            for r in rows:
+                ck = f"{r['case_id']}:{inst}:{cat}"
+                if ck not in seen:
+                    seen[ck] = 1
+                    if ck not in st["cases"]:
+                        ctx.write("cases", r)
+                        st["cases"][ck] = 1
+
+        def walk(a, b):
+            dr = f"{a:%Y/%m/%d} - {b:%Y/%m/%d}"
+            total, rows = list_page(int(cat), int(inst), zuil, int(y), 1, dr)
+            if not total:
+                return
+            take(rows)
+            if total <= 10:
+                return
+            if a == b:
+                for p in range(2, math.ceil(total / 10) + 1):
+                    take(list_page(int(cat), int(inst), zuil, int(y), p, dr)[1])
+                return
+            mid = a + (b - a) // 2
+            walk(a, mid)
+            walk(mid + dt.timedelta(days=1), b)
+
+        walk(dt.date(int(y), 1, 1), min(dt.date(int(y), 12, 31), dt.date.today()))
+        log(f"{qkey}: {len(seen)} of {st['counts'][qkey]} after date windows")
+
+    gaps = [k for k, n in st["counts"].items() if n > 10]
+    complete &= ctx.run_items("windows", gaps, windows, workers=1)
 
     def decision(key):
         case_id, inst, cat = key.split(":")
