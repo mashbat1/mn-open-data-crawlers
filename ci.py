@@ -81,6 +81,53 @@ def to_table(rows):
     return pa.table(arrays)
 
 
+def write_table(files, key_cols, path, chunk=200_000):
+    """Streams part files into one Parquet file without holding the table in memory (millions of rows killed the
+    runner). Pass 1 fixes the schema from every row; pass 2 writes newest files first and drops older copies of the
+    same key (later runs overwrite earlier ones)."""
+    kinds = {}
+    for f in files:
+        with gzip.open(f, "rt", encoding="utf-8") as fh:
+            for line in fh:
+                for k, v in json.loads(line).items():
+                    if v is not None:
+                        kinds.setdefault(k, set()).add(type(v).__name__)
+    cols = list(kinds)
+    types = {c: column_type([{"bool": True, "int": 1, "float": 1.5}.get(t, "x") for t in kinds[c]]) for c in cols}
+    schema = pa.schema([(c, types[c]) for c in cols])
+
+    def conv(v, t):
+        if v is None:
+            return None
+        if t == pa.string():
+            return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+        return v
+
+    seen, buf, n = set(), [], 0
+    writer = pq.ParquetWriter(path, schema, compression="zstd", compression_level=9)
+
+    def flush():
+        if buf:
+            writer.write_table(pa.table({c: pa.array([conv(r.get(c), types[c]) for r in buf], type=types[c]) for c in cols},
+                                        schema=schema))
+            buf.clear()
+    for f in sorted(files, reverse=True):
+        with gzip.open(f, "rt", encoding="utf-8") as fh:
+            for line in fh:
+                r = json.loads(line)
+                k = tuple(str(r.get(c)) for c in key_cols) if key_cols else hashlib.md5(line.encode()).digest()
+                if k in seen:
+                    continue
+                seen.add(k)
+                buf.append(r)
+                n += 1
+                if len(buf) >= chunk:
+                    flush()
+    flush()
+    writer.close()
+    return n
+
+
 def finalize(src):
     tag = f"wip-{src}"
     keys = getattr(importlib.import_module(f"crawlers.{src}"), "KEYS", {})
@@ -99,22 +146,10 @@ def finalize(src):
                 "failed_items": {k: len(v) for k, v in state.get("errors", {}).items() if v},
                 "failed_examples": {k: dict(list(v.items())[:5]) for k, v in state.get("errors", {}).items() if v}}
     for table, files in by_table.items():
-        seen, rows = {}, []
-        for f in files:  # later runs overwrite earlier copies of the same key
-            with gzip.open(f, "rt", encoding="utf-8") as fh:
-                for line in fh:
-                    r = json.loads(line)
-                    k = tuple(str(r.get(c)) for c in keys[table]) if table in keys else hashlib.md5(line.encode()).digest()
-                    if k in seen:
-                        rows[seen[k]] = r
-                    else:
-                        seen[k] = len(rows)
-                        rows.append(r)
         path = os.path.join(out, f"{src}__{table}.parquet")
-        pq.write_table(to_table(rows), path, compression="zstd", compression_level=9)
-        manifest["tables"][table] = {"rows": len(rows), "bytes": os.path.getsize(path)}
-        print(f"{table}: {len(rows)} rows, {os.path.getsize(path) / 1e6:.1f} MB")
-        del rows, seen
+        n = write_table(files, keys.get(table), path)
+        manifest["tables"][table] = {"rows": n, "bytes": os.path.getsize(path)}
+        print(f"{table}: {n} rows, {os.path.getsize(path) / 1e6:.1f} MB")
     json.dump(manifest, open(os.path.join(out, "manifest.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     final_tag = f"{src}-{date}"
     if release_exists(final_tag):

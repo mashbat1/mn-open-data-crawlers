@@ -1,5 +1,6 @@
-"""Treasury e-payments (ЕЗА) as published on shilendans.gov.mn: supplier totals per year and per month, then for
-every supplier and year the organisations that paid it. Every period is checked against the server's count."""
+"""Treasury e-payments (ЕЗА) as published on shilendans.gov.mn: supplier totals per month (each checked against the
+server's count), then for every supplier and year the organisations that paid it. The yearly supplier list is not
+used: its reported total does not match what its pages return; yearly figures are the sum of the months."""
 import datetime as dt
 import json
 
@@ -17,7 +18,6 @@ def periods():
     today = dt.date.today()
     out = []
     for y in range(FIRST_YEAR, today.year + 1):
-        out.append((str(y), f"{y}-01-01", f"{y}-12-31"))
         for m in range(1, 13):
             first = dt.date(y, m, 1)
             if first > today:
@@ -43,8 +43,8 @@ def crawl(ctx):
             ctx.write("eza_suppliers", {"period": period, "register": r.get("register") or "", "name": r.get("name") or "",
                                         "count": r.get("count"), "amount": r.get("amount"),
                                         "json": json.dumps(r, ensure_ascii=False)})
-        if len(period) == 4:
-            st["year_regs"][period] = sorted({str(r.get("register")) for r in rows if r.get("register")})
+        regs = st["year_regs"].setdefault(period[:4], [])
+        regs.extend(sorted({str(r.get("register")) for r in rows if r.get("register")} - set(regs)))
 
     complete = ctx.run_items("periods", plist if not ctx.sample else plist[-2:], one_period, key=lambda p: p[0], workers=2)
     items = [f"{y}:{reg}" for y, regs in sorted(st["year_regs"].items()) for reg in regs]
