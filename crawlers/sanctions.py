@@ -9,7 +9,7 @@ OS_INDEX = "https://data.opensanctions.org/datasets/latest/index.json"
 FULL = ("mn_parliament", "worldbank_debarred", "adb_sanctions")
 MN_FILTERED = ("default",)        # 'default' already contains peps + sanctions; keep only rows linked to Mongolia
 ADB = "https://apim.adb.org/sanctions/lists/v1/published-list"
-KEYS = {"opensanctions": ["dataset", "id"], "adb": ["_id"]}
+KEYS = {"opensanctions": ["dataset", "id"], "adb": ["source_row"]}
 http = Http(rate=2.0, timeout=1800)
 csv.field_size_limit(1 << 26)
 
@@ -47,29 +47,34 @@ def crawl(ctx):
         ctx.expect(f"opensanctions:{name}", kept)
         ctx.state.setdefault("versions", {})[name] = d.get("last_export")
         log(f"{name}: {kept} kept of {n}")
-    # the largest page size the API accepts, then offset pages; duplicates across pages are dropped
-    seen, batches, size, o = {}, [], None, None
-    for size in (1000, 500, 200, 100):
-        try:
-            o = http.json(ADB, params={"size": size, "offset": 0})
-            break
-        except Exception:  # noqa: BLE001 - 400 for sizes above the limit
-            continue
-    total = (o.get("meta") or {}).get("totalItems") or 0
+    # The published API caps size at 100. Preserve source entries even when
+    # several entries share an entity ID; otherwise rows disappear at finalize.
+    size = 100
+    o = http.json(ADB, params={"size": size, "offset": 0})
+    if not isinstance(o, dict) or not isinstance((o.get("meta") or {}).get("totalItems"), int):
+        raise RuntimeError("ADB did not expose a valid total")
+    total = o['meta']['totalItems']
     ctx.expect("adb", total)
-    batches.append(first_list(o))
-    offset = len(batches[0])
-    while not ctx.sample and batches[-1] and offset < total + size:
-        batches.append(first_list(http.json(ADB, params={"size": size, "offset": offset})))
-        offset += size
-    for b in batches:
-        for r in b:
-            rid = str(r.get("id") or json.dumps(r, sort_keys=True))
-            seen.setdefault(rid, r)
-    for i, (rid, r) in enumerate(seen.items()):
-        if ctx.sample and i >= 3:
+    offset, ids = 0, set()
+    while offset < total:
+        batch = first_list(o)
+        if not batch:
+            raise RuntimeError(f"ADB empty page at {offset} before {total}")
+        for i, row in enumerate(batch):
+            rid = str(row.get('id') or json.dumps(row, sort_keys=True))
+            ids.add(rid)
+            ctx.write('adb', {'_id': rid, 'source_row': offset + i, **flat(row)})
+            if ctx.sample and i >= 2:
+                return True
+        offset += len(batch)
+        if offset >= total:
             break
-        ctx.write("adb", {"_id": rid, **flat(r)})
-    log(f"adb: {len(seen)} unique of {total} reported ({len(batches)} requests)")
-    ctx.state["adb_short"] = max(0, total - len(seen))  # reported in the manifest; the API lists fewer than it counts
+        o = http.json(ADB, params={'size': size, 'offset': offset})
+        if (o.get('meta') or {}).get('totalItems') != total:
+            raise RuntimeError('ADB total changed during collection')
+    if offset != total:
+        raise RuntimeError(f'ADB received {offset} entries vs {total} reported')
+    ctx.state['adb_unique_ids'] = len(ids)
+    ctx.state['adb_duplicate_id_entries'] = offset - len(ids)
+    log(f'adb: {offset} source entries, {len(ids)} distinct entity IDs, {total} reported')
     return True

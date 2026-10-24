@@ -35,6 +35,11 @@ class NotFound(Exception):
     pass
 
 
+class TimeBudgetExpired(Exception):
+    """A partially processed item pauses without consuming its network-error retry budget."""
+    pass
+
+
 class Http:
     """Thread-safe client: at most `rate` request starts per second across all threads, retries with backoff
     on 5xx / 429 / network errors, honours Retry-After."""
@@ -236,6 +241,8 @@ class Ctx:
                         done.add(k)
                         errors.pop(k, None)
                         ok += 1
+                    except TimeBudgetExpired:
+                        pass
                     except Exception as e:  # noqa: BLE001 - recorded and retried on the next run
                         attempts[k] = attempts.get(k, 0) + 1
                         errors[k] = f"{type(e).__name__}: {str(e)[:200]}"
