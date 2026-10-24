@@ -57,6 +57,8 @@ def main():
                     raise SystemExit("unexpected cleanup path; local data preserved")
                 shutil.rmtree(target)
                 print(f"removed verified local copy {target}", flush=True)
+            subprocess.run(['gh', 'workflow', 'run', 'coverage.yml', '-R', 'mashbat1/mn-open-data-crawlers'],
+                           env=env, check=False)
             return
         if result.get("crashed") or any(
                 state.get("attempts", {}).get(stage, {}).get(key, 0) >= 3
