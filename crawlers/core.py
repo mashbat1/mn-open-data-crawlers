@@ -14,6 +14,12 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from html.parser import HTMLParser
 
+if os.name == "nt":
+    # Windows can build the site's incomplete certificate chain using its native
+    # trust store. Keep verification enabled (audit.mn omits an intermediate).
+    import truststore
+    truststore.inject_into_ssl()
+
 import requests
 
 USER_AGENT = ("mn-open-data-crawlers/1.0 (public-interest transparency research; "
@@ -200,11 +206,12 @@ class Ctx:
 
     # ---- the work loop ----
     def run_items(self, stage, items, fn, key=str, workers=2):
-        """Runs fn(item) for every item not done yet. Returns True when every item is done (or has failed
-        MAX_ATTEMPTS times across runs); False when the time budget stopped it."""
+        """Runs fn(item) for unfinished items, retrying at most MAX_ATTEMPTS times.
+        Returns True only when every requested item succeeded; exhausted failures remain incomplete."""
         done = self.done_set(stage)
         attempts = self.state["attempts"].setdefault(stage, {})
         errors = self.state["errors"].setdefault(stage, {})
+        items = list(items)
         todo = [it for it in items if str(key(it)) not in done and attempts.get(str(key(it)), 0) < MAX_ATTEMPTS]
         if self.sample:
             todo = todo[:3]
@@ -240,7 +247,7 @@ class Ctx:
         remaining = [x for x in todo if str(key(x)) not in done and attempts.get(str(key(x)), 0) < MAX_ATTEMPTS]
         log(f"{stage}: finished this run with {ok} ok, {fail} failed, {len(remaining)} remaining")
         self.save()
-        return not remaining
+        return all(str(key(x)) in done for x in items)
 
 
 # ---- small helpers ----

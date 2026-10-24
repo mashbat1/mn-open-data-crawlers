@@ -32,8 +32,19 @@ def crawl(ctx):
     st = ctx.state
     if "total" not in st:
         st["total"], _ = list_page(0)
-        st["opinion_totals"] = {o: list_page(0, o)[0] or 0 for o in OPINIONS}
+        if st["total"] is None:
+            raise RuntimeError("audit list did not expose its total")
         ctx.save()
+        log(f"audit: {st['total']} reports")
+    st.setdefault("opinion_totals", {})
+    for opinion in OPINIONS:
+        if opinion not in st["opinion_totals"]:
+            count, _ = list_page(0, opinion)
+            if count is None:
+                raise RuntimeError(f"audit opinion list did not expose its total: {opinion}")
+            st["opinion_totals"][opinion] = count
+            ctx.save()
+            log(f"audit: {opinion}: {count}")
     ctx.expect("audits", st["total"])
     for o, n in st["opinion_totals"].items():
         ctx.expect(f"audit_opinions:{o}", n)

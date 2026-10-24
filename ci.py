@@ -131,7 +131,10 @@ def write_table(files, key_cols, path, chunk=200_000):
 def finalize(src):
     tag = f"wip-{src}"
     keys = getattr(importlib.import_module(f"crawlers.{src}"), "KEYS", {})
-    state = json.load(open(os.path.join(WORK, "state.json"), encoding="utf-8"))
+    with open(os.path.join(WORK, "state.json"), encoding="utf-8") as fh:
+        state = json.load(fh)
+    if not state.get("complete") or any(state.get("errors", {}).values()):
+        raise SystemExit("crawl is incomplete; preserving the work-in-progress release")
     dl = os.path.join(WORK, "all_parts")
     os.makedirs(dl, exist_ok=True)
     gh("release", "download", tag, "-p", "*.jsonl.gz", "-D", dl, "--clobber")
@@ -142,6 +145,7 @@ def finalize(src):
     os.makedirs(out, exist_ok=True)
     date = time.strftime("%Y-%m-%d")
     manifest = {"source": src, "crawled": date, "runs": state.get("runs"), "tables": {},
+                "coverage_scope": state.get("coverage_scope"),
                 "server_reported": state.get("expect", {}),
                 "failed_items": {k: len(v) for k, v in state.get("errors", {}).items() if v},
                 "failed_examples": {k: dict(list(v.items())[:5]) for k, v in state.get("errors", {}).items() if v}}
@@ -150,6 +154,9 @@ def finalize(src):
         n = write_table(files, keys.get(table), path)
         manifest["tables"][table] = {"rows": n, "bytes": os.path.getsize(path)}
         print(f"{table}: {n} rows, {os.path.getsize(path) / 1e6:.1f} MB")
+        expected = state.get("expect", {}).get(table)
+        if isinstance(expected, int) and n != expected:
+            raise SystemExit(f"{table}: {n} unique rows vs {expected} expected; work-in-progress preserved")
     json.dump(manifest, open(os.path.join(out, "manifest.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     final_tag = f"{src}-{date}"
     if release_exists(final_tag):
@@ -164,6 +171,8 @@ def finalize(src):
     for f in glob.glob(os.path.join(out, "*")):
         if sizes.get(os.path.basename(f)) != os.path.getsize(f):
             raise SystemExit(f"verification failed for {f}")
+    with open(os.path.join(WORK, "published.json"), "w", encoding="utf-8") as fh:
+        json.dump({"source": src, "tag": final_tag, "verified_sizes": sizes}, fh)
     gh("release", "delete", tag, "--yes", "--cleanup-tag")
     print(f"published {final_tag}; removed {tag}")
 

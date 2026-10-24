@@ -17,6 +17,13 @@ PHONE = re.compile(r"(?<!\d)(?:\+?976[\s-]?)?[789]\d{3}[\s-]?\d{4}(?!\d)")
 CONTACT = re.compile(r"утас|имэйл|и-мэйл|e-?mail|цахим шуудан|факс", re.I)
 
 
+def select_year(year):
+    html = http.get(f"{BASE}/", params={"y": year}).text
+    m = re.search(r'<footer[^>]*data-year="(\d{4})"', html)
+    if not m or int(m.group(1)) != int(year):
+        raise RuntimeError(f"EITI requested year {year}, site selected {m.group(1) if m else 'unknown'}")
+
+
 def rows_of(html):
     return [[strip_tags(td) for td in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
             for tr in re.findall(r"<tbody[^>]*>.*?</tbody>|<tr[^>]*>(.*?)</tr>", html, re.S) if tr]
@@ -44,9 +51,13 @@ def crawl(ctx):
     st.setdefault("registers", {})
 
     def company_pages(year):
+        select_year(year)
         n, page = 0, 0
         while True:
             html = http.post(f"{BASE}/company-list", params={"page": page}, data={"session_year": year}).text
+            reported_year = re.search(r"__\s*(\d{4})", html)
+            if reported_year and int(reported_year.group(1)) != int(year):
+                raise RuntimeError(f"EITI company table returned {reported_year.group(1)} for {year}")
             rows = [r for r in table_rows(html) if len(r) >= 3 and re.fullmatch(r"\d{7}", r[1] or "")]
             if not rows:
                 break
@@ -68,6 +79,7 @@ def crawl(ctx):
 
     def payment_pages(key):
         year, tab, typ = key.split(":")
+        select_year(year)
         page, n = 0, 0
         while True:
             html = http.get(f"{BASE}/report-{tab}", params={"page": page, "type": typ, "session_year": year}).text
@@ -87,6 +99,7 @@ def crawl(ctx):
 
     def report(key):
         year, reg = key.split(":")
+        select_year(year)
         html = http.get(f"{BASE}/report-print/{reg}", params={"session_year": year}, timeout=300).text
         # split the form into numbered sections so each table keeps its heading
         heading, t_no = None, 0

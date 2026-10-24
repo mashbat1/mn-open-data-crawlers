@@ -11,7 +11,7 @@ from crawlers.core import Ctx, log
 
 SOURCES = ["parliament", "xacxom", "legalinfo", "shuukh", "companies", "sanctions", "egazar", "iaac",
            "shilendans_eza", "shilendans_od", "shilendans_reports",
-           "audit", "eiti", "cabinet", "ebarimt"]  # the last four: Mongolian networks only (run locally)
+           "audit", "eiti", "cabinet", "ebarimt", "tender"]  # local-only sources and the authorised Tender API
 MAX_RUNS = 15
 
 ap = argparse.ArgumentParser()

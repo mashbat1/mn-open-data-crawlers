@@ -7,7 +7,7 @@ on:
       source:
         required: true
         type: choice
-        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports]
+        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports, tender]
       sample:
         type: boolean
         default: false
@@ -43,6 +43,8 @@ jobs:
       - name: Crawl
         env:
           GH_TOKEN: ${{ secrets.DATA_TOKEN }}
+          TENDER_API_TOKEN: ${{ secrets.TENDER_API_TOKEN }}
+          TENDER_API_BASE: ${{ vars.TENDER_API_BASE || 'https://opendata.tender.gov.mn/api' }}
         run: python run.py "$SRC" ${{ inputs.sample && '--sample --budget-min 15' || '--budget-min 315' }}
       - name: Save to the data repo
         if: ${{ !inputs.sample && always() }}
