@@ -34,9 +34,33 @@ class ImportTests(unittest.TestCase):
     def test_verified_export_records_scope_without_nationwide_claim(self):
         with tempfile.TemporaryDirectory() as d:
             work = Path(d, "work")
-            self.assertTrue(import_export(self.export(d, complete=True, verified=True), work)["complete"])
+            self.assertFalse(import_export(self.export(d, complete=True, verified=True), work)["complete"])
             state = json.loads((work / "state.json").read_text())
             self.assertFalse(state["coverage_scope"]["nationwide_completeness_verified"])
+            self.assertIn("contract", state["coverage_scope"]["missing_sections"])
+
+    def test_recovers_committed_checkpoint_without_a_false_complete_claim(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.export(d)
+            path.write_text("\n".join(path.read_text().splitlines()[:-1]), encoding="utf-8")
+            result = import_export(path, Path(d, "work"), allow_partial=True)
+            self.assertFalse(result["complete"])
+            self.assertEqual(result["rows"]["pages"], 1)
+
+    def test_imports_result_contract_and_public_api_without_treating_award_as_completion(self):
+        with tempfile.TemporaryDirectory() as d:
+            records = [{"type": "metadata", "source": "https://www.tender.gov.mn"},
+                       {"type": "page", "kind": "result_detail", "url": "https://www.tender.gov.mn/mn/result/detail/123",
+                        "tables": [["Winner", "Public Company"]]},
+                       {"type": "page", "kind": "contract_detail", "url": "https://www.tender.gov.mn/mn/contract/detail/456"},
+                       {"type": "api_response", "url": "https://www.tender.gov.mn/api/invitation?page=1", "data": [{"id": 123}]},
+                       {"type": "manifest", "records": 4, "complete": True}]
+            path = Path(d, "data.jsonl")
+            path.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+            result = import_export(path, Path(d, "work"))
+            self.assertFalse(result["complete"])
+            self.assertEqual(result["rows"]["pages"], 2)
+            self.assertEqual(result["rows"]["api_responses"], 1)
 
     def test_rejects_sensitive_or_foreign_urls(self):
         for url in ["https://example.com/data", "https://www.tender.gov.mn/api?token=secret"]:

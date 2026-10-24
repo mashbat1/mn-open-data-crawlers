@@ -23,10 +23,15 @@ def assess(manifest):
         expected = manifest.get('server_reported', {}).get(name)
         if isinstance(expected, int) and table['rows'] != expected:
             mismatches[name] = {'expected': expected, 'stored': table['rows']}
-    return {'status': 'needs_attention' if failed or mismatches else ('published' if manifest.get('tables') else 'unverified'),
+    scope = manifest.get('coverage_scope')
+    status = 'needs_attention' if failed or mismatches else ('published' if manifest.get('tables') else 'unverified')
+    if manifest.get('source') == 'tender' and status == 'published' and (
+            not isinstance(scope, dict) or scope.get('nationwide_completeness_verified') is not True or scope.get('missing_sections')):
+        status = 'partial'
+    return {'status': status,
             'tables': {k: v['rows'] for k, v in manifest.get('tables', {}).items()},
             'failed_items': failed, 'count_mismatches': mismatches,
-            'coverage_scope': manifest.get('coverage_scope'), 'crawled': manifest.get('crawled')}
+            'coverage_scope': scope, 'crawled': manifest.get('crawled')}
 
 
 def main():

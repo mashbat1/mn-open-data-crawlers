@@ -2,8 +2,8 @@
 
     python import_tender_export.py path/to/tender-public-export.jsonl --publish
 
-Only the manifest's verified filter scope can be called complete. Unknown or
-partial coverage stays in wip-tender; it never becomes a finished data release.
+Browser exports stay in wip-tender until a separate full-coverage reconciliation.
+Observed linked pages alone cannot establish completeness of every Tender section.
 """
 import argparse
 import hashlib
@@ -17,6 +17,19 @@ from urllib.parse import urlparse
 
 from crawlers.core import Ctx
 
+SECTIONS = {"plan", "invitation", "result", "contract", "implementation", "performance",
+            "complaint", "blacklist", "supplier", "organization", "customer", "statistics"}
+
+
+def page_section(url):
+    parts = [p for p in urlparse(url).path.split("/") if p]
+    if parts and parts[0] in {"mn", "en"}:
+        parts.pop(0)
+    if not parts or parts[0] not in SECTIONS or any(
+            p.lower() in {"create", "edit", "delete", "submit", "login", "account", "profile", "register"} for p in parts[1:]):
+        raise ValueError("unexpected procurement page path")
+    return parts[0], len(parts) > 1 and parts[0] != "statistics"
+
 
 def public_url(value):
     u = urlparse(value)
@@ -26,12 +39,13 @@ def public_url(value):
     return value
 
 
-def import_export(path, work):
+def import_export(path, work, allow_partial=False):
     ctx = Ctx("tender", str(work))
     manifest = None
     pages = 0
     record_count = 0
     source_ok = False
+    observed_sections = {}
     try:
         with open(path, encoding="utf-8-sig") as fh:
             for line in fh:
@@ -52,8 +66,10 @@ def import_export(path, work):
                         raise ValueError("missing export metadata")
                     url = public_url(record["url"])
                     kind = record.get("kind")
-                    if kind not in {"invitation_list", "invitation_detail"} or "/invitation" not in urlparse(url).path:
+                    section, detail = page_section(url)
+                    if kind != section + ("_detail" if detail else "_list"):
                         raise ValueError("unexpected page type or path")
+                    observed_sections[section] = observed_sections.get(section, 0) + 1
                     ctx.write("pages", {"url": url, "kind": kind, "title": record.get("title"),
                                        "text": record.get("text"), "tables": json.dumps(record.get("tables", []), ensure_ascii=False),
                                        "links": json.dumps(record.get("links", []), ensure_ascii=False)})
@@ -66,6 +82,16 @@ def import_export(path, work):
                             match = re.search(r"/invitation/(?:detail/)?([\w-]*\d[\w-]*)/?$", urlparse(target).path)
                             if match:
                                 ctx.write("invitation_links", {"url": target, "id": match.group(1), "name": link.get("name")})
+                elif typ == "api_response":
+                    if not source_ok:
+                        raise ValueError("missing export metadata")
+                    url = public_url(record["url"])
+                    if not re.match(r"^/api/(statistics|invitations?|results?|contracts?|plans?|tenders?)(/|$)", urlparse(url).path):
+                        raise ValueError("unexpected public API path")
+                    if re.search(r"/(account|profile|auth|login|create|edit|delete|submit)(/|$)", urlparse(url).path, re.I):
+                        raise ValueError("unexpected private API path")
+                    payload = json.dumps(record.get("data"), ensure_ascii=False, sort_keys=True)
+                    ctx.write("api_responses", {"url": url, "sha256": hashlib.sha256(payload.encode()).hexdigest(), "data": payload})
                 elif typ == "manifest":
                     if not source_ok or record.get("records") != record_count:
                         raise ValueError("manifest record count does not match the export")
@@ -73,14 +99,19 @@ def import_export(path, work):
                 else:
                     raise ValueError("unexpected export record type")
                 record_count += 1
+        if manifest is None and allow_partial and source_ok and pages > 0:
+            manifest = {"complete": False, "stopped": True, "errors": ["Recovered interrupted export without final manifest"]}
         if not source_ok or pages == 0 or manifest is None:
             raise ValueError("export must include metadata, public pages and a final manifest")
         coverage = manifest.get("coverage", {})
         verified = bool(coverage) and all(
             c.get("verified") is True and isinstance(c.get("reported_total"), int)
             and c.get("reported_total") == c.get("unique_invitations") for c in coverage.values())
-        ctx.state["complete"] = manifest.get("complete") is True and verified and not manifest.get("errors") and not manifest.get("stopped")
+        ctx.state["complete"] = False
         ctx.state["coverage_scope"] = {"method": "normal browser export", "filters": coverage,
+                                       "observed_sections": observed_sections,
+                                       "invitation_filter_counts_match": verified,
+                                       "missing_sections": sorted({"plan", "invitation", "result", "contract", "implementation"} - observed_sections.keys()),
                                        "nationwide_completeness_verified": False}
         ctx.state["browser_export_errors"] = manifest.get("errors", [])
         ctx.expect("exported_pages", pages)
@@ -99,11 +130,12 @@ def main():
     ap.add_argument("file", type=Path)
     ap.add_argument("--workdir", type=Path, default=Path("work_tender_browser"))
     ap.add_argument("--publish", action="store_true")
+    ap.add_argument("--allow-partial", action="store_true", help="recover a checkpoint file interrupted before its final manifest")
     args = ap.parse_args()
     work = args.workdir.resolve()
     if work.exists():
         raise SystemExit("use a new workdir for each import; existing data is preserved")
-    result = import_export(args.file, work)
+    result = import_export(args.file, work, allow_partial=args.allow_partial)
     print(json.dumps(result))
     if args.publish:
         env = dict(os.environ, WORKDIR=str(work), DATA_REPO="mashbat1/gov-crawler", PYTHONIOENCODING="utf-8")

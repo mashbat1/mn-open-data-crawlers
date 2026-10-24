@@ -16,7 +16,8 @@ from .core import Http, log
 
 KEYS = {"invitations": ["invitationId"], "plans": ["tenderId"],
         "suppliers": ["invitation_id", "row_key"], "committee": ["invitation_id", "row_key"],
-        "pages": ["url"], "invitation_links": ["url"], "attachments": ["page_url", "url"]}
+        "pages": ["url"], "invitation_links": ["url"], "attachments": ["page_url", "url"],
+        "api_responses": ["url", "sha256"]}
 http = Http(rate=0.5, timeout=60, retries=3)
 
 
@@ -56,7 +57,12 @@ def crawl(ctx):
     api_base()
     if not os.environ.get("TENDER_API_TOKEN", "").strip():
         raise RuntimeError("Tender requires operator-issued API access; TENDER_API_TOKEN is missing")
-    st["coverage_scope"] = "All records accessible to the issued API credential; may be organisation-scoped."
+    st["coverage_scope"] = {
+        "method": "operator-issued API", "credential_scope_may_be_organisation_only": True,
+        "configured_sections": ["plans", "invitations", "suppliers", "committee"],
+        "missing_sections": ["contracts", "implementation"],
+        "nationwide_completeness_verified": False,
+    }
     st.setdefault("tender_ids", {})
     st.setdefault("tender_counts", {})
 

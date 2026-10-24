@@ -64,16 +64,22 @@ downloaded through that blocked connection. The older documented API domain
 
 If the public invitation list opens in your normal browser, `browser_export.js`
 can be pasted into that page's DevTools Console. Click its export button and choose
-a JSONL file. It reads the displayed list, follows exposed pagination/year links
-and invitation detail links with a two-second delay, and streams public text,
-tables and attachment references to the file. It never downloads attachments or
-copies authentication information. A security challenge stops the export.
-The manifest explicitly records observed coverage; hidden filters, absent totals
-or unmatched counts cannot be claimed as nationwide completeness.
+a JSONL file. It follows exposed public procurement links, including plans,
+invitations, results, contracts and implementation pages, and exposed year and
+pagination links. It also saves JSON from recognised public procurement API
+URLs actually requested by the displayed page and follows explicit API next links.
+Requests are spaced two seconds apart. Public text, tables and attachment
+references are saved; attachments, authentication headers and cookies are never
+exported. A security challenge stops the export. Every 50 records the partial
+file is committed so an interrupted tab does not lose the whole collection.
+The manifest records observed and missing sections. Client-only pagination,
+hidden filters and unknown totals require further reconciliation. This exporter
+does not establish nationwide completeness, including companies and performance.
 
 `python import_tender_export.py tender-public-export.jsonl --publish` imports that
-file and uses the private Releases pipeline. Partial exports remain `wip-tender`;
-only verified coverage can produce a dated release. The separate `tender` crawler
+file and uses the private Releases pipeline. Browser exports remain `wip-tender`
+until full-coverage reconciliation. Use `--allow-partial` to recover a committed
+checkpoint that has no final manifest. The separate `tender` crawler
 supports the documented authorised API, with `TENDER_API_TOKEN` (GitHub secret)
 and an optional `TENDER_API_BASE` (Actions variable pointing to an official HTTPS
 endpoint). Its parser is tested against the documentation, not a successful live

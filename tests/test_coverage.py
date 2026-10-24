@@ -16,3 +16,8 @@ class CoverageTests(unittest.TestCase):
                          'failed_items': {}, 'coverage_scope': 'sitemap pages only'})
         self.assertEqual(result['status'], 'published')
         self.assertEqual(result['coverage_scope'], 'sitemap pages only')
+
+    def test_scoped_tender_export_does_not_unlock_all_data_gate(self):
+        result = assess({'source': 'tender', 'tables': {'pages': {'rows': 100}}, 'failed_items': {},
+                         'coverage_scope': {'nationwide_completeness_verified': False, 'missing_sections': ['contract']}})
+        self.assertEqual(result['status'], 'partial')
