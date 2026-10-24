@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-from crawlers.core import Ctx, log
+from crawlers.core import Ctx, TimeBudgetExpired, log
 
 SOURCES = ["parliament", "xacxom", "legalinfo", "shuukh", "companies", "sanctions", "egazar", "iaac",
            "shilendans_eza", "shilendans_od", "shilendans_reports",
@@ -24,12 +24,16 @@ a = ap.parse_args()
 mod = importlib.import_module(f"crawlers.{a.source}")
 ctx = Ctx(a.source, a.workdir, sample=a.sample, budget_min=a.budget_min)
 ctx.state["complete"] = False
+if getattr(mod, 'http', None):
+    mod.http.deadline = ctx.deadline
 if a.sample and getattr(mod, "http", None):
     mod.http.timeout = min(mod.http.timeout, 30)
     mod.http.retries = min(mod.http.retries, 2)
 complete, crashed = False, None
 try:
     complete = bool(mod.crawl(ctx))
+except TimeBudgetExpired:
+    log('crawl time budget reached; state will resume')
 except Exception as e:  # noqa: BLE001 - state is saved; the next run resumes
     crashed = f"{type(e).__name__}: {str(e)[:300]}"
     log("crawl stopped:", crashed)

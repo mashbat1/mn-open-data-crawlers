@@ -47,6 +47,7 @@ class Http:
     def __init__(self, rate=1.0, timeout=60, retries=6, headers=None, verify=True):
         self.interval = 1.0 / rate
         self.timeout, self.retries, self.verify = timeout, retries, verify
+        self.deadline = None
         self.headers = {"User-Agent": USER_AGENT, "Accept-Language": "mn,en;q=0.8", **(headers or {})}
         self._lock = threading.Lock()
         self._next = 0.0
@@ -73,7 +74,14 @@ class Http:
         kw.setdefault("verify", self.verify)
         last = None
         for attempt in range(self.retries + 1):
+            if self.deadline is not None and time.monotonic() >= self.deadline:
+                raise TimeBudgetExpired()
             self._wait_turn()
+            if self.deadline is not None:
+                remaining = self.deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeBudgetExpired()
+                kw['timeout'] = min(kw['timeout'], max(1, remaining))
             try:
                 r = self._session().request(method, url, **kw)
                 self.count += 1
@@ -82,7 +90,7 @@ class Http:
                 if r.status_code in (429, 500, 502, 503, 504, 520, 521, 522, 524):
                     last = f"HTTP {r.status_code}"
                     wait_s = float(r.headers.get("Retry-After") or 0) or min(300, 3 * 2 ** attempt)
-                    time.sleep(wait_s + random.random())
+                    self._backoff(wait_s + random.random())
                     continue
                 r.raise_for_status()
                 return r
@@ -90,8 +98,15 @@ class Http:
                 raise
             except (requests.ConnectionError, requests.Timeout) as e:
                 last = type(e).__name__
-                time.sleep(min(300, 3 * 2 ** attempt) + random.random())
+                self._backoff(min(300, 3 * 2 ** attempt) + random.random())
         raise RuntimeError(f"giving up after {self.retries + 1} tries ({last}): {url}")
+
+    def _backoff(self, seconds):
+        if self.deadline is not None:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0 or seconds >= remaining:
+                raise TimeBudgetExpired()
+        time.sleep(seconds)
 
     def get(self, url, **kw):
         return self.request("GET", url, **kw)
