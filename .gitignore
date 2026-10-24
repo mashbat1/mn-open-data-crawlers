@@ -2,3 +2,4 @@ work/
 work_*/
 __pycache__/
 *.pyc
+logs_*.txt

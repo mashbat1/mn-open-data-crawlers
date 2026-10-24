@@ -18,7 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 REPO = os.environ.get("DATA_REPO", "mashbat1/gov-crawler")
-WORK = "work"
+WORK = os.environ.get("WORKDIR", "work")
 
 
 def gh(*args, check=True, capture=False):
