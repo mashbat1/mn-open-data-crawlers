@@ -30,8 +30,7 @@ def crawl(ctx):
         d = by_name.get(name)
         res = next((r for r in (d or {}).get("resources", []) if r["name"] == "targets.simple.csv"), None)
         if not res:
-            log(f"{name}: targets.simple.csv not found")
-            continue
+            raise RuntimeError(f"{name}: required targets.simple.csv not found")
         n = kept = 0
         with http.get(res["url"], stream=True) as r:
             r.encoding = "utf-8"
@@ -76,5 +75,7 @@ def crawl(ctx):
         raise RuntimeError(f'ADB received {offset} entries vs {total} reported')
     ctx.state['adb_unique_ids'] = len(ids)
     ctx.state['adb_duplicate_id_entries'] = offset - len(ids)
+    ctx.state['coverage_scope'] = {'adb': {'reported_entries': total, 'collected_entries': offset,
+                                          'distinct_entity_ids': len(ids), 'duplicate_id_entries': offset - len(ids)}}
     log(f'adb: {offset} source entries, {len(ids)} distinct entity IDs, {total} reported')
     return True

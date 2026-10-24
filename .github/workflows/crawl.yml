@@ -66,3 +66,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run crawl.yml -R "$GITHUB_REPOSITORY" -f source="$SRC"
+      - name: Refresh lookup input after registry publication
+        if: ${{ !inputs.sample && inputs.source == 'companies' && hashFiles('work/published.json') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run prepare-inputs.yml -R "$GITHUB_REPOSITORY"
