@@ -16,11 +16,12 @@ def gh(*args):
 
 def main():
     releases = json.loads(gh('release', 'list', '--limit', '100', '--json', 'tagName,createdAt'))
-    tag = max((r for r in releases if r['tagName'].startswith('companies-')), key=lambda r: r['createdAt'])['tagName']
+    tag = max((r for r in releases if r['tagName'].startswith(('registry-', 'companies-'))), key=lambda r: r['createdAt'])['tagName']
+    prefix = 'registry' if tag.startswith('registry-') else 'companies'
     folder = Path('prepared-inputs')
     folder.mkdir(exist_ok=True)
-    gh('release', 'download', tag, '-p', 'companies__companies.parquet', '-D', str(folder))
-    parquet = pq.ParquetFile(folder / 'companies__companies.parquet')
+    gh('release', 'download', tag, '-p', f'{prefix}__companies.parquet', '-D', str(folder))
+    parquet = pq.ParquetFile(folder / f'{prefix}__companies.parquet')
     # The source's header is shifted: first column is the actual company register.
     column = parquet.schema_arrow.names[0]
     registers = sorted({str(v).strip() for batch in parquet.iter_batches(columns=[column])

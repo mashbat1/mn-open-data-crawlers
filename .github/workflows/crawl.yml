@@ -7,7 +7,7 @@ on:
       source:
         required: true
         type: choice
-        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports, ebarimt, eiti, tender]
+        options: [parliament, xacxom, legalinfo, shuukh, companies, registry, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports, ebarimt, eiti, tender]
       sample:
         type: boolean
         default: false
@@ -67,7 +67,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run crawl.yml -R "$GITHUB_REPOSITORY" -f source="$SRC"
       - name: Refresh lookup input after registry publication
-        if: ${{ !inputs.sample && inputs.source == 'companies' && hashFiles('work/published.json') != '' }}
+        if: ${{ !inputs.sample && (inputs.source == 'companies' || inputs.source == 'registry') && hashFiles('work/published.json') != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run prepare-inputs.yml -R "$GITHUB_REPOSITORY"

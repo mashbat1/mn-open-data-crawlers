@@ -111,6 +111,9 @@ def crawl(ctx):
     ctx.expect("companies", n)
     ctx.state["registry_file"] = {"path": f["path"], "created_at": f.get("created_at"), "rows": n}
     log(f"registry: {n} legal entities")
+    if ctx.source == "registry":
+        ctx.state["coverage_scope"] = "Complete published legal-entity dump and data catalogue; liquidation/removal lists are a separate source."
+        return True
 
     # Ministry of Finance spreadsheets: every published file (complaints come as monthly files), rows deduplicated
     XLSX_ALL = {"barred_suppliers": r"оролцох эрхээ хязгаарлуулсан", "tender_complaints": r"гомдлын"}
