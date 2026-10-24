@@ -59,6 +59,14 @@ def last_offset(html, callback):
     return max(offsets) if offsets else None
 
 
+def company_page(offset):
+    # This public endpoint changes its PHP session's filter after returning the
+    # first page. Reusing that anonymous session silently changes later pages
+    # from the shared directory to a smaller year-filtered list.
+    http._session().cookies.clear()
+    return http.post(f"{BASE}/company-list", params={"page": offset}, data={"session_year": 2024}).text
+
+
 def scrub(cells):
     """Drop personal contact details: a row labelled as phone/e-mail keeps its label only; stray e-mails and phone
     numbers are masked."""
@@ -80,12 +88,17 @@ def crawl(ctx):
         for stage in ("company_directory", "payments"):
             st["attempts"][stage] = {}
             st["errors"][stage] = {}
+    if st.get("pagination_version", 0) < 3:
+        st["pagination_version"] = 3
+        st.setdefault("repair_history", {})["anonymous_directory_session_v3"] = dict(st["errors"].get("company_directory", {}))
+        st["attempts"]["company_directory"] = {}
+        st["errors"]["company_directory"] = {}
 
     def company_pages(_):
         n, page, last = 0, 0, None
         seen = set()
         while True:
-            html = http.post(f"{BASE}/company-list", params={"page": page}, data={"session_year": 2024}).text
+            html = company_page(page)
             rows = data_rows(html)
             exposed_last = last_offset(html, "companyList")
             if exposed_last is not None:
@@ -142,6 +155,8 @@ def crawl(ctx):
 
     keys = [f"{y}:tab8:{t}" for y in YEARS for t in TAB8] + [f"{y}:tab9:{t}" for y in YEARS for t in TAB9]
     done &= ctx.run_items("payments", keys if not ctx.sample else keys[-1:], payment_pages, workers=1)
+    if not ctx.sample and all(key in ctx.done_set("payments") for key in keys):
+        ctx.expect("payments", sum(st["expect"]["payments:" + key] for key in keys))
 
     def report(key):
         year, reg = key.split(":")

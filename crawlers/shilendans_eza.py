@@ -4,6 +4,7 @@ used: its reported total does not match what its pages return; yearly figures ar
 import datetime as dt
 import json
 import re
+from pathlib import Path
 
 from .core import Http, flat, log
 from .shilendans_common import INTEG, pages_all
@@ -12,7 +13,7 @@ SUPPLIERS = INTEG + "/integrationECopyCredits/getBeltgenNiiluulegch"
 SUPPLIER_ORGS = INTEG + "/integrationECopyCredits/getSupplierOne"
 FIRST_YEAR = 2023
 KEYS = {"eza_suppliers": ["period", "register", "name"], "eza_supplier_orgs": ["period", "register", "org_name"]}
-http = Http(rate=4.0, timeout=180, retries=8)
+http = Http(rate=2.0, timeout=30, retries=1)
 ROW_FILTERS = {"eza_suppliers": lambda row: bool(re.fullmatch(r"\d{4}-\d{2}", row.get("period", "")))}
 
 
@@ -31,10 +32,10 @@ def periods():
 
 def crawl(ctx):
     st = ctx.state
-    if st.get("monthly_period_version", 0) < 2:
-        st["monthly_period_version"] = 2
+    if st.get("monthly_period_version", 0) < 3:
+        st["monthly_period_version"] = 3
         obsolete = {k: v for k, v in st.get("errors", {}).get("periods", {}).items() if len(k) == 4}
-        st["superseded_annual_period_errors"] = obsolete
+        st.setdefault("superseded_annual_period_errors", {}).update(obsolete)
         for key in obsolete:
             st["errors"]["periods"].pop(key)
             st.get("attempts", {}).get("periods", {}).pop(key, None)
@@ -46,7 +47,11 @@ def crawl(ctx):
     def one_period(p):
         period, start, end = p
         params = {"startDate": start, "endDate": end, "supplierType": "", "ezaType": "", "registerNo": "", "orgName": ""}
-        rows, total = pages_all(http, SUPPLIERS, params, size=100)
+        def progress(n, total):
+            if n % 1000 == 0 or n == total:
+                log(f"{period}: {n}/{total} supplier rows")
+        rows, total = pages_all(http, SUPPLIERS, params, size=100, on_page=progress,
+                                cache_dir=Path(ctx.workdir) / "monthly_pages" / period)
         if total is not None and len(rows) < total:
             raise RuntimeError(f"{period}: {len(rows)} of {total}")
         ctx.expect(f"eza_suppliers:{period}", total if total is not None else len(rows))
