@@ -1,4 +1,5 @@
 name: crawl
+run-name: "${{ inputs.source }} (${{ inputs.sample && 'sample' || 'full' }})"
 # One source per run. Long crawls stop before the 6 h job limit, save their state to the private data repo and
 # start the next run themselves. `sample` makes a few requests per stage and stores nothing.
 on:
@@ -46,7 +47,7 @@ jobs:
           GH_TOKEN: ${{ secrets.DATA_TOKEN }}
         run: |
           mkdir -p inputs
-          tag=$(gh release list -R "$DATA_REPO" --limit 100 --json tagName,createdAt --jq '[.[]|select(.tagName|startswith("lookup-inputs-"))]|sort_by(.createdAt)|last|.tagName')
+          tag=$(gh release list -R "$DATA_REPO" --limit 100 --json tagName,publishedAt --jq '[.[]|select(.tagName|startswith("lookup-inputs-"))]|sort_by(.publishedAt)|last|.tagName')
           [ -n "$tag" ] && [ "$tag" != "null" ] || { echo "Prepare lookup inputs first"; exit 1; }
           gh release download "$tag" -R "$DATA_REPO" -D inputs -p ebarimt_registers.json -p input_manifest.json
       - name: Crawl

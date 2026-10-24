@@ -35,7 +35,7 @@ def assess(manifest):
 
 
 def main():
-    releases = json.loads(gh('release', 'list', '--limit', '100', '--json', 'tagName,createdAt,isPrerelease').stdout)
+    releases = json.loads(gh('release', 'list', '--limit', '100', '--json', 'tagName,publishedAt,isPrerelease').stdout)
     tags = {r['tagName'] for r in releases}
     folder = Path('work_coverage')
     folder.mkdir(exist_ok=True)
@@ -45,7 +45,7 @@ def main():
         candidates = [r for r in releases if not r['isPrerelease'] and r['tagName'].startswith(source + '-')]
         entry = {'status': 'missing'}
         if candidates:
-            tag = max(candidates, key=lambda r: r['createdAt'])['tagName']
+            tag = max(candidates, key=lambda r: r['publishedAt'])['tagName']
             target = folder / source
             target.mkdir(exist_ok=True)
             download = gh('release', 'download', tag, '-p', 'manifest.json', '-D', str(target), '--clobber', check=False)
@@ -66,6 +66,9 @@ def main():
                 entry['completed_stage_items'] = {k: len(v) for k, v in state.get('done', {}).items()}
                 entry['pending_errors'] = {k: len(v) for k, v in state.get('errors', {}).items() if v}
                 entry['last_crash'] = state.get('last_crash')
+                if state.get('resume_status') == 'needs_attention' or state.get('last_crash'):
+                    entry['status'] = 'needs_attention'
+                entry['retryable_pending'] = state.get('pending_retryable')
         result['sources'][source] = entry
     result['all_sources_published'] = all(s['status'] == 'published' for s in result['sources'].values())
     target = folder / 'coverage.json'

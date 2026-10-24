@@ -15,8 +15,8 @@ def gh(*args):
 
 
 def main():
-    releases = json.loads(gh('release', 'list', '--limit', '100', '--json', 'tagName,createdAt'))
-    tag = max((r for r in releases if r['tagName'].startswith(('registry-', 'companies-'))), key=lambda r: r['createdAt'])['tagName']
+    releases = json.loads(gh('release', 'list', '--limit', '100', '--json', 'tagName,publishedAt'))
+    tag = max((r for r in releases if r['tagName'].startswith(('registry-', 'companies-'))), key=lambda r: r['publishedAt'])['tagName']
     prefix = 'registry' if tag.startswith('registry-') else 'companies'
     folder = Path('prepared-inputs')
     folder.mkdir(exist_ok=True)
