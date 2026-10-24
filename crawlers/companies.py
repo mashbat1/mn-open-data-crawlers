@@ -17,7 +17,7 @@ OD = "https://opendata.gov.mn/api/v1"
 BURTGEL = "https://opendata.burtgel.gov.mn"
 REGISTRY_TITLE = "Хуулийн этгээдийн улсын бүртгэлийн нээлттэй өгөгдөл"
 XLSX = {"barred_suppliers": "оролцох эрхээ хязгаарлуулсан", "tender_complaints": "гомдлын шийдвэрлэлт"}
-KEYS = {"od_catalog": ["id"], "companies": ["Регистрийн дугаар"], "liquidated": ["reg_no"]}
+KEYS = {"od_catalog": ["id"], "companies": ["registry_row"], "liquidated": ["source_row"]}
 http = Http(rate=2.0, timeout=600)
 
 
@@ -47,13 +47,25 @@ def header_names(path):
         except ijson.IncompleteJSONError:
             header = None
     if isinstance(header, dict):
-        header = next((v for v in header.values() if isinstance(v, list)), list(header))
+        header = [k for k in header if k != "type"]
     out = []
     for h in header or []:
         if isinstance(h, dict):
             h = next((h[k] for k in ("name", "field", "key", "title", "label", "code") if k in h), json.dumps(h, ensure_ascii=False))
         out.append(str(h))
     return out
+
+
+def registry_record(rec, names, index):
+    if isinstance(rec, list):
+        fields = list(names)
+        # The published schema advertises an address column absent from Data.
+        if len(fields) == len(rec) + 1 and "Хуулийн этгээдийн хаяг" in fields:
+            fields.remove("Хуулийн этгээдийн хаяг")
+        if len(fields) != len(rec):
+            raise RuntimeError(f"registry header has {len(fields)} columns, row has {len(rec)}")
+        rec = dict(zip(fields, rec))
+    return {**rec, "registry_row": index}
 
 
 def crawl(ctx):
@@ -86,8 +98,7 @@ def crawl(ctx):
     try:
         with open(path, "rb") as fh:
             for rec in ijson.items(fh, "Data.item", use_float=True):
-                if isinstance(rec, list):  # rows are arrays; column names come from the Header
-                    rec = {(names[i] if i < len(names) else f"c{i}"): v for i, v in enumerate(rec)}
+                rec = registry_record(rec, names, n)
                 ctx.write("companies", flat(rec))
                 n += 1
                 if ctx.sample and n >= 3:
@@ -97,6 +108,7 @@ def crawl(ctx):
             raise
     os.remove(path)
     ctx.expect("companies_file_bytes", size)
+    ctx.expect("companies", n)
     ctx.state["registry_file"] = {"path": f["path"], "created_at": f.get("created_at"), "rows": n}
     log(f"registry: {n} legal entities")
 
@@ -139,9 +151,13 @@ def crawl(ctx):
         o = http.json(f"{BURTGEL}/les/table", params={"draw": 1, "start": start, "length": 1000})
         total = o.get("recordsTotal") or 0
         ctx.expect("liquidated", total)
-        for row in o.get("data") or []:
+        page_rows = o.get("data") or []
+        if start < total and not page_rows:
+            raise RuntimeError("empty liquidation page before the server total")
+        for offset, row in enumerate(page_rows):
             vals = [strip_tags(str(c)) for c in row]
-            ctx.write("liquidated", {"reg_no": vals[0] if vals else None, "name": vals[1] if len(vals) > 1 else None,
+            ctx.write("liquidated", {"source_row": start + offset,
+                                     "reg_no": vals[0] if vals else None, "name": vals[1] if len(vals) > 1 else None,
                                      "legal_form": vals[2] if len(vals) > 2 else None,
                                      "liquidated_on": vals[3] if len(vals) > 3 else None})
         if ctx.sample:

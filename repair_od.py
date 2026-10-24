@@ -35,7 +35,15 @@ def replace_partitions(base, updates, target):
             count += len(filtered)
         for records in updates.values():
             for offset in range(0, len(records), 100000):
-                table = pa.Table.from_pylist(records[offset:offset + 100000], schema=original.schema_arrow)
+                normalized = []
+                for record in records[offset:offset + 100000]:
+                    row = dict(record)
+                    for field in original.schema_arrow:
+                        value = row.get(field.name)
+                        if value is not None and pa.types.is_string(field.type) and not isinstance(value, str):
+                            row[field.name] = json.dumps(value, ensure_ascii=False)
+                    normalized.append(row)
+                table = pa.Table.from_pylist(normalized, schema=original.schema_arrow)
                 writer.write_table(table)
                 count += len(table)
     return count, removed
