@@ -89,8 +89,11 @@ def main():
     sizes = {a['name']: a['size'] for a in assets}
     if any(sizes.get(p.name) != p.stat().st_size for p in output.iterdir()):
         raise RuntimeError('Uploaded snapshot sizes do not match')
-    gh('release', 'delete', repair_tag, '--yes', '--cleanup-tag')
     print(f'Published and verified {final_tag}: {count} rows, no unresolved bulk tasks', flush=True)
+    try:
+        gh('release', 'delete', repair_tag, '--yes', '--cleanup-tag')
+    except subprocess.CalledProcessError as exc:
+        print(f'Published snapshot is valid; temporary checkpoint cleanup deferred: {exc}', flush=True)
 
 
 if __name__ == '__main__':

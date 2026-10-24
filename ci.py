@@ -81,7 +81,7 @@ def to_table(rows):
     return pa.table(arrays)
 
 
-def write_table(files, key_cols, path, chunk=200_000, keep=None):
+def write_table(files, key_cols, path, chunk=200_000, keep=None, file_versions=None):
     """Streams part files into one Parquet file without holding the table in memory (millions of rows killed the
     runner). Pass 1 fixes the schema from every row; pass 2 writes newest files first and drops older copies of the
     same key (later runs overwrite earlier ones)."""
@@ -114,7 +114,10 @@ def write_table(files, key_cols, path, chunk=200_000, keep=None):
             writer.write_table(pa.table({c: pa.array([conv(r.get(c), types[c]) for r in buf], type=types[c]) for c in cols},
                                         schema=schema))
             buf.clear()
-    for f in sorted(files, reverse=True):
+    # Local timestamp run IDs and Actions numeric run IDs cannot be compared
+    # lexicographically. Release asset creation times provide their actual order.
+    versions = file_versions or {}
+    for f in sorted(files, key=lambda p: (versions.get(os.path.basename(p), ""), os.path.basename(p)), reverse=True):
         with gzip.open(f, "rt", encoding="utf-8") as fh:
             for line in fh:
                 r = json.loads(line)
@@ -147,6 +150,8 @@ def finalize(src):
     dl = os.path.join(WORK, "all_parts")
     os.makedirs(dl, exist_ok=True)
     gh("release", "download", tag, "-p", "*.jsonl.gz", "-D", dl, "--clobber")
+    assets = json.loads(gh("release", "view", tag, "--json", "assets", capture=True))["assets"]
+    file_versions = {asset["name"]: asset["createdAt"] for asset in assets}
     by_table = {}
     for f in sorted(glob.glob(os.path.join(dl, "*.jsonl.gz"))):
         by_table.setdefault(os.path.basename(f).split(".")[0], []).append(f)
@@ -160,7 +165,8 @@ def finalize(src):
                 "failed_examples": {k: dict(list(v.items())[:5]) for k, v in state.get("errors", {}).items() if v}}
     for table, files in by_table.items():
         path = os.path.join(out, f"{src}__{table}.parquet")
-        n = write_table(files, keys.get(table), path, keep=getattr(source, "ROW_FILTERS", {}).get(table))
+        n = write_table(files, keys.get(table), path, keep=getattr(source, "ROW_FILTERS", {}).get(table),
+                        file_versions=file_versions)
         manifest["tables"][table] = {"rows": n, "bytes": os.path.getsize(path)}
         print(f"{table}: {n} rows, {os.path.getsize(path) / 1e6:.1f} MB")
         expected = state.get("expect", {}).get(table)

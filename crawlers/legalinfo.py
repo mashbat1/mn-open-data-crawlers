@@ -2,6 +2,7 @@
 import datetime as dt
 import math
 import re
+from html.parser import HTMLParser
 
 from .core import Http, html_text, log, strip_tags
 
@@ -13,6 +14,66 @@ PAGE = 20
 http = Http(rate=3.0, timeout=45, retries=1, headers={"X-Requested-With": "XMLHttpRequest"})
 
 
+class ActListParser(HTMLParser):
+    """Read actual cell boundaries, including nested spans and divs."""
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.depth = 0
+        self.row = None
+        self.root_depth = self.block_depth = self.title_depth = None
+        self.block = None
+        self.rows = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag in self.VOID:
+            return
+        self.depth += 1
+        classes = (attrs.get("class") or "").split()
+        if "legal-list-component" in classes:
+            self.row = {"blocks": {}, "title_parts": []}
+            self.root_depth = self.depth
+        if self.row is None:
+            return
+        if attrs.get("data-block"):
+            self.block = attrs["data-block"]
+            self.block_depth = self.depth
+            self.row["blocks"].setdefault(self.block, [])
+        if tag == "a":
+            match = re.search(r"(?:[?&])lawId=(\d+)", attrs.get("href", ""))
+            if match:
+                self.row.setdefault("law_id", match.group(1))
+            if "act-name" in classes:
+                self.title_depth = self.depth
+
+    def handle_endtag(self, tag):
+        if tag in self.VOID:
+            return
+        if self.row is not None:
+            if self.depth == self.title_depth:
+                self.title_depth = None
+            if self.depth == self.block_depth:
+                self.block = self.block_depth = None
+            if self.depth == self.root_depth:
+                if self.row.get("law_id"):
+                    blocks = {k: " ".join(" ".join(v).split()) for k, v in self.row["blocks"].items()}
+                    title = " ".join(" ".join(self.row["title_parts"]).split())
+                    self.rows.append({"law_id": self.row["law_id"], "number": blocks.get("actnumber"),
+                                      "title": title or blocks.get("title"), "enacted": blocks.get("enacteddate"),
+                                      "blocks": {k: v for k, v in blocks.items() if k not in ("id", "actnumber", "title")}})
+                self.row = None
+        self.depth = max(0, self.depth - 1)
+
+    def handle_data(self, text):
+        if self.row is not None:
+            if self.block:
+                self.row["blocks"][self.block].append(text)
+            if self.title_depth is not None:
+                self.row["title_parts"].append(text)
+
+
 def list_page(cat, active, page, start=None, end=None, order="asc"):
     data = {"filtercategorytypeid": cat, "code": cat - 26, "isactive": active, "page": page,
             "sort": "enacteddate", "sortType": order}
@@ -20,24 +81,23 @@ def list_page(cat, active, page, start=None, end=None, order="asc"):
         data.update(filterstartdate=start, filterenddate=end)
     html = http.post(f"{BASE}/ajaxListBody/", data=data).json().get("Html") or ""
     total = re.search(r"Нийт\s*(\d+)", html)
-    rows = []
-    for chunk in html.split("legal-list-component")[1:]:
-        m = re.search(r"lawId=(\d+)", chunk)
-        if not m:
-            continue
-        # each block runs from the rest of its opening tag to the start of the next block's tag
-        blocks = dict((k, strip_tags(re.sub(r"<[^>]*$", "", v.split(">", 1)[-1]))) for k, v in re.findall(r'data-block="(\w+)"(.*?)(?=data-block="|\Z)', chunk, re.S))
-        title = re.search(r'class="act-name[^"]*">(.*?)</a>', chunk, re.S)
-        rows.append({"law_id": m.group(1), "category": cat, "active": active,
-                     "number": blocks.get("actnumber"), "title": strip_tags(title.group(1)) if title else blocks.get("title"),
-                     "enacted": blocks.get("enacteddate"),
-                     "blocks": {k: v for k, v in blocks.items() if k not in ("id", "actnumber", "title")}})
+    parser = ActListParser()
+    parser.feed(html)
+    rows = [dict(row, category=cat, active=active) for row in parser.rows]
     return (int(total.group(1)) if total else None), rows
 
 
 def crawl(ctx):
     complete = True
     st = ctx.state
+    if st.get("metadata_parser_version", 0) < 2:
+        st["metadata_parser_version"] = 2
+        # Refresh metadata emitted by the earlier parser; detail text is independent.
+        for stage in ("list", "windows"):
+            ctx.done_set(stage).clear()
+            st.setdefault("done", {}).pop(stage, None)
+            st.setdefault("attempts", {}).pop(stage, None)
+            st.setdefault("errors", {}).pop(stage, None)
     st.setdefault("law_ids", {})
     if not ctx.stage_done("totals"):
         totals = {}
@@ -98,6 +158,8 @@ def crawl(ctx):
 
         walk(dt.date(1900, 1, 1), dt.date.today())
         log(f"list {key}: {len(seen)} of {st['totals'][key]} after date windows")
+        if len(seen) < st["totals"][key]:
+            raise RuntimeError(f"legal list {key}: {len(seen)} of {st['totals'][key]} unique acts")
 
     gaps = [k for k, n in st["totals"].items() if len(st["listed"].get(k, {})) < n]
     complete &= ctx.run_items("windows", gaps, windows, workers=2)

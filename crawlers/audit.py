@@ -84,10 +84,10 @@ def crawl(ctx):
 def reconcile(ctx):
     """The global list swaps tied rows between pages. Reconcile by the site's public office/type filters."""
     st = ctx.state
-    if st.get("reconcile_version", 0) < 3:
-        st["reconcile_version"] = 3
-        st["reconcile_v3_prior_errors"] = dict(st.get("errors", {}).get("reconcile", {}))
-        for key in st["reconcile_v3_prior_errors"]:
+    if st.get("reconcile_version", 0) < 4:
+        st["reconcile_version"] = 4
+        st["reconcile_v4_prior_errors"] = dict(st.get("errors", {}).get("reconcile", {}))
+        for key in st["reconcile_v4_prior_errors"]:
             st["attempts"].setdefault("reconcile", {})[key] = 0
     known = st.setdefault("audit_ids", {})
     opinions = st.setdefault("opinion_ids", {})
@@ -145,10 +145,10 @@ def reconcile(ctx):
         if have() >= expected:
             return
         verified = st.setdefault("verified_audit_partitions", {})
-        dimensions = [("year", range(dt.date.today().year, 1999, -1)),
-                      ("audit_category", (1, 2, 3, 4, 5, 6)),
+        dimensions = [("audit_category", (1, 2, 3, 4, 5, 6)),
                       ("audit_report_type", (1, 2, 3, 5)),
-                      ("cat", (10007, 10008, 10009))]
+                      ("cat", (10007, 10008, 10009)),
+                      ("year", range(dt.date.today().year, 1999, -1))]
 
         def partition(query, depth=0):
             if have() >= expected:
@@ -193,7 +193,10 @@ def reconcile(ctx):
                 # Search terms come from the site's displayed titles. They
                 # split residual ties without guessing or enumerating IDs.
                 words = Counter(w.lower() for title in titles for w in re.findall(r"[^\W\d_]{4,}", title))
-                for word, _ in sorted(words.items(), key=lambda item: (item[1], -len(item[0])))[:24]:
+                rare = sorted(words, key=lambda word: (words[word], -len(word)))[:24]
+                common = [word for word, _ in words.most_common(24)]
+                years = sorted(set(re.findall(r"\b(?:19|20)\d{2}\b", " ".join(titles))))
+                for word in dict.fromkeys(rare + common + years):
                     partition({**query, "q": word}, len(dimensions))
                     if have() >= expected:
                         return
