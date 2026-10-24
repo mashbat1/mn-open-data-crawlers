@@ -1,0 +1,19 @@
+name: prepare-inputs
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.DATA_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyarrow==17.0.0 requests==2.32.3
+      - name: Prepare company register input in the cloud
+        run: python prepare_inputs.py
