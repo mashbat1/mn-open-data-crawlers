@@ -5,6 +5,8 @@ import datetime as dt
 import json
 import re
 from pathlib import Path
+import gzip
+import subprocess
 
 from .core import Http, flat, log
 from .shilendans_common import INTEG, pages_all
@@ -15,6 +17,27 @@ FIRST_YEAR = 2023
 KEYS = {"eza_suppliers": ["period", "register", "name"], "eza_supplier_orgs": ["period", "register", "org_name"]}
 http = Http(rate=2.0, timeout=30, retries=1)
 ROW_FILTERS = {"eza_suppliers": lambda row: bool(re.fullmatch(r"\d{4}-\d{2}", row.get("period", "")))}
+
+
+def registers_from_parts(paths):
+    years = {}
+    for path in paths:
+        with gzip.open(path, "rt", encoding="utf-8") as source:
+            for line in source:
+                row = json.loads(line)
+                if ROW_FILTERS["eza_suppliers"](row) and row.get("register"):
+                    years.setdefault(row["period"][:4], set()).add(str(row["register"]))
+    return {year: sorted(regs) for year, regs in years.items()}
+
+
+def validate_snapshot(state, workdir):
+    if state.get("monthly_union_version") != 1:
+        raise RuntimeError("Supplier-year inputs have not been rebuilt from all monthly records")
+    for directory in (Path(workdir) / "monthly_pages").glob("*"):
+        totals = {json.loads(p.read_text(encoding="utf-8"))["meta"]["totalElements"]
+                  for p in directory.glob("page_*.json")}
+        if len(totals) > 1:
+            raise RuntimeError(f"{directory.name}: conflicting source totals {sorted(totals)}")
 
 
 def periods():
@@ -32,8 +55,8 @@ def periods():
 
 def crawl(ctx):
     st = ctx.state
-    if st.get("monthly_period_version", 0) < 3:
-        st["monthly_period_version"] = 3
+    if st.get("monthly_period_version", 0) < 4:
+        st["monthly_period_version"] = 4
         obsolete = {k: v for k, v in st.get("errors", {}).get("periods", {}).items() if len(k) == 4}
         st.setdefault("superseded_annual_period_errors", {}).update(obsolete)
         for key in obsolete:
@@ -41,6 +64,24 @@ def crawl(ctx):
             st.get("attempts", {}).get("periods", {}).pop(key, None)
         for key in st.get("errors", {}).get("periods", {}):
             st["attempts"].setdefault("periods", {})[key] = 0
+        for directory in (Path(ctx.workdir) / "monthly_pages").glob("*"):
+            totals = {json.loads(p.read_text(encoding="utf-8"))["meta"]["totalElements"]
+                      for p in directory.glob("page_*.json")}
+            if len(totals) > 1:
+                ctx.done_set("periods").discard(directory.name)
+        st.get("errors", {}).pop("snapshot_validation", None)
+    if st.get("monthly_union_version") != 1:
+        if ctx.done_set("periods"):
+            folder = Path(ctx.workdir) / "monthly_bootstrap"
+            folder.mkdir(exist_ok=True)
+            subprocess.run(["gh", "release", "download", "wip-shilendans_eza", "-R", "mashbat1/gov-crawler",
+                            "-p", "eza_suppliers.*.jsonl.gz", "-D", str(folder), "--clobber"], check=True)
+            rebuilt = registers_from_parts(list(folder.glob("*.gz")) + list(Path(ctx.parts).glob("eza_suppliers.*.gz")))
+            if not rebuilt:
+                raise RuntimeError("No monthly supplier records available for input reconciliation")
+            st["year_regs"] = rebuilt
+            log("rebuilt monthly supplier registers:", {year: len(regs) for year, regs in rebuilt.items()})
+        st["monthly_union_version"] = 1
     st.setdefault("year_regs", {})
     plist = periods()
 

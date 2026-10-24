@@ -28,6 +28,8 @@ def assess(manifest):
     if manifest.get('source') == 'tender' and status == 'published' and (
             not isinstance(scope, dict) or scope.get('nationwide_completeness_verified') is not True or scope.get('missing_sections')):
         status = 'partial'
+    if manifest.get('source') == 'ebarimt' and status == 'published' and isinstance(scope, dict) and scope.get('legacy_unavailable_count'):
+        status = 'partial'
     return {'status': status,
             'tables': {k: v['rows'] for k, v in manifest.get('tables', {}).items()},
             'failed_items': failed, 'count_mismatches': mismatches,

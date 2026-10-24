@@ -5,6 +5,13 @@ from crawlers.shilendans_common import pages_all
 
 
 class CacheTests(unittest.TestCase):
+    def test_smaller_inferred_last_page_total_cannot_silently_replace_the_initial_count(self):
+        class Client:
+            def json(self, url, params):
+                return {"content": [{"id": params["page"]}],
+                        "totalElements": 5 if params["page"] == 0 else 2, "totalPages": 5}
+        with self.assertRaisesRegex(RuntimeError, "5 -> 2"):
+            pages_all(Client(), "https://example.test", {}, size=1)
     def test_retry_reuses_successful_pages_after_later_page_fails(self):
         calls = []
         class Client:

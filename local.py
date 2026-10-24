@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 
 def main():
@@ -18,6 +19,7 @@ def main():
     ap.add_argument("--budget-min", type=float, default=30)
     ap.add_argument("--max-runs", type=int, default=48)
     ap.add_argument("--keep-local", action="store_true")
+    ap.add_argument("--wait-for-lock", action="store_true", help="wait for an existing local runner to checkpoint and exit")
     a = ap.parse_args()
     root = Path(__file__).resolve().parent
     os.chdir(root)
@@ -27,15 +29,21 @@ def main():
     lock.write(b"0")
     lock.flush()
     lock.seek(0)
-    try:
-        if os.name == "nt":
-            import msvcrt
-            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        raise SystemExit(f"another local {a.source} runner holds the lock")
+    lock_deadline = time.monotonic() + 7200
+    while True:
+        try:
+            lock.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if not a.wait_for_lock or time.monotonic() >= lock_deadline:
+                raise SystemExit(f"another local {a.source} runner holds the lock")
+            time.sleep(5)
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
                DATA_REPO="mashbat1/gov-crawler", WORKDIR=str(work))
     subprocess.run(["gh", "repo", "view", env["DATA_REPO"], "--json", "nameWithOwner"], env=env, check=True)
@@ -60,9 +68,9 @@ def main():
             subprocess.run(['gh', 'workflow', 'run', 'coverage.yml', '-R', 'mashbat1/mn-open-data-crawlers'],
                            env=env, check=False)
             return
-        if result.get("crashed") or any(
+        if result.get("crashed") or (not any(state.get("pending_retryable", {}).values()) and any(
                 state.get("attempts", {}).get(stage, {}).get(key, 0) >= 3
-                for stage, errors in state.get("errors", {}).items() for key in errors):
+                for stage, errors in state.get("errors", {}).items() for key in errors)):
             raise SystemExit("crawl needs attention; partial release and local data preserved")
     raise SystemExit("run limit reached; partial release and local data preserved")
 

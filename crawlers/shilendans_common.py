@@ -49,7 +49,10 @@ def pages_all(http, url, params, size=200, on_page=None, cache_dir=None):
         if meta is None and n == 0 and total is None and not got:
             return rows, 0
         if meta is not None:
-            total = meta.get("totalElements", total)
+            reported = meta.get("totalElements", total)
+            if total is not None and reported != total:
+                raise RuntimeError(f"Source total changed during pagination: {total} -> {reported}, page {n}")
+            total = reported
             pages = meta.get("totalPages", 0)
         else:
             pages = -(-(total or 0) // size) if total else n + 2

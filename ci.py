@@ -141,6 +141,9 @@ def finalize(src):
         state = json.load(fh)
     if not state.get("complete") or any(state.get("errors", {}).values()):
         raise SystemExit("crawl is incomplete; preserving the work-in-progress release")
+    validator = getattr(source, "validate_snapshot", None)
+    if validator:
+        validator(state, WORK)
     dl = os.path.join(WORK, "all_parts")
     os.makedirs(dl, exist_ok=True)
     gh("release", "download", tag, "-p", "*.jsonl.gz", "-D", dl, "--clobber")
@@ -189,10 +192,28 @@ def save(src):
         gh("release", "create", tag, "--title", f"{src} (crawl in progress)", "--notes",
            "Partial output of an unfinished crawl. Replaced by a dated release when complete.",
            "--prerelease", "--latest=false")
+    result_path = os.path.join(WORK, "result.json")
+    result = json.load(open(result_path))
+    validation_error = None
+    validator = getattr(importlib.import_module(f"crawlers.{src}"), "validate_snapshot", None)
+    if result.get("complete") and validator:
+        state_path = os.path.join(WORK, "state.json")
+        state = json.load(open(state_path, encoding="utf-8"))
+        try:
+            validator(state, WORK)
+        except Exception as exc:
+            validation_error = str(exc)
+            state["complete"] = False
+            state["resume_status"] = "needs_attention"
+            state.setdefault("errors", {}).setdefault("snapshot_validation", {})["source"] = validation_error
+            result["complete"] = False
+            json.dump(state, open(state_path, "w", encoding="utf-8"), ensure_ascii=False)
+            json.dump(result, open(result_path, "w"))
     parts = sorted(glob.glob(os.path.join(WORK, "parts", "*.jsonl.gz")))
     upload(tag, parts + [os.path.join(WORK, "state.json")])
     print(f"saved {len(parts)} part files to {tag}")
-    result = json.load(open(os.path.join(WORK, "result.json")))
+    if validation_error:
+        raise SystemExit("source validation failed; uploaded partial data preserved: " + validation_error)
     if result.get("complete"):
         finalize(src)
 
