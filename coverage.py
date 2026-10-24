@@ -6,7 +6,7 @@ import subprocess
 
 REPO = 'mashbat1/gov-crawler'
 SOURCES = ['parliament', 'xacxom', 'legalinfo', 'shuukh', 'companies', 'registry', 'sanctions', 'egazar',
-           'iaac', 'shilendans_eza', 'shilendans_od', 'shilendans_reports', 'audit', 'eiti', 'cabinet', 'ebarimt', 'tender']
+           'iaac', 'shilendans_eza', 'shilendans_od', 'shilendans_reports', 'audit', 'eiti', 'cabinet', 'ebarimt', 'tender', 'tender_archive']
 
 
 def gh(*args, check=True):

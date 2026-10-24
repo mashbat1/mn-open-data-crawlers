@@ -47,6 +47,16 @@ Exhausted failed items remain incomplete and cannot be finalized as a full relea
 
 ## Tender
 
+The public archive at [opendata.mn dataset 193](https://opendata.mn/database/29/193)
+provides an independently downloadable Tender invitation extract. Run
+`python run.py tender_archive` or select `tender_archive` in Actions. Metadata
+currently advertises 56,290 rows for 2024–2025 and a June 2026 archive update.
+The crawler verifies the row count, unique invitation IDs and stable metadata;
+its manifest records the actual years, date range, source, publisher and license
+(CC BY-NC-ND 4.0). It downloads no attachments. This archive is published under
+its own release name and does not establish completeness of the live Tender
+portal or 2026 data.
+
 The current website has returned a Cloudflare verification page to ordinary HTTP
 and unmodified Chrome sessions during the 2026-10-24 check. No data has been
 downloaded through that blocked connection. The older documented API domain
