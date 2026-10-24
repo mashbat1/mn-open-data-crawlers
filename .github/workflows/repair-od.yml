@@ -7,6 +7,7 @@ on:
         default: shilendans_od-2026-10-24
 permissions:
   contents: read
+  actions: write
 concurrency:
   group: crawl-shilendans_od
   cancel-in-progress: false
@@ -24,3 +25,8 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - run: python repair_od.py "$BASE_TAG"
+      - name: Continue checkpointed repair
+        if: ${{ hashFiles('od-repair/CONTINUE') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run repair-od.yml -R "$GITHUB_REPOSITORY" -f base_tag="$BASE_TAG"

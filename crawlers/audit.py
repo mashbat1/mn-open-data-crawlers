@@ -6,6 +6,8 @@ import gzip
 import glob
 import json
 import os
+from collections import Counter
+import datetime as dt
 
 from .core import Http, TimeBudgetExpired, log, strip_tags
 
@@ -82,6 +84,11 @@ def crawl(ctx):
 def reconcile(ctx):
     """The global list swaps tied rows between pages. Reconcile by the site's public office/type filters."""
     st = ctx.state
+    if st.get("reconcile_version", 0) < 3:
+        st["reconcile_version"] = 3
+        st["reconcile_v3_prior_errors"] = dict(st.get("errors", {}).get("reconcile", {}))
+        for key in st["reconcile_v3_prior_errors"]:
+            st["attempts"].setdefault("reconcile", {})[key] = 0
     known = st.setdefault("audit_ids", {})
     opinions = st.setdefault("opinion_ids", {})
     if not st.get("reconcile_bootstrapped"):
@@ -137,41 +144,61 @@ def reconcile(ctx):
         store(rows, opinion)
         if have() >= expected:
             return
-        filters = [{"aimag_id": office}]
-        filters += [{"aimag_id": office, "cat": cat} for cat in (10007, 10008, 10009)]
-        for query in filters:
+        verified = st.setdefault("verified_audit_partitions", {})
+        dimensions = [("year", range(dt.date.today().year, 1999, -1)),
+                      ("audit_category", (1, 2, 3, 4, 5, 6)),
+                      ("audit_report_type", (1, 2, 3, 5)),
+                      ("cat", (10007, 10008, 10009))]
+
+        def partition(query, depth=0):
             if have() >= expected:
                 return
             if ctx.time_up():
                 raise TimeBudgetExpired()
+            token = json.dumps([opinion, query], sort_keys=True)
+            if token in verified:
+                return
             total, first = list_page(0, opinion, **query)
             if total is None:
-                raise RuntimeError("audit filtered list did not expose a total")
+                raise RuntimeError("audit partition did not expose a total")
             store(first, opinion)
+            seen = {str(r["id"]) for r in first}
+            if total <= PAGE:
+                if len(seen) != total:
+                    raise RuntimeError("audit small partition has duplicate or missing rows")
+                verified[token] = total
+                return
+            # Public filters narrow tied-date groups before using unstable paging.
+            if depth < len(dimensions):
+                field, values = dimensions[depth]
+                for value in values:
+                    partition({**query, field: value}, depth + 1)
+                    if have() >= expected:
+                        return
+            titles = [r["cells"][1] for r in first if len(r["cells"]) > 1]
             for offset in range(PAGE, total, PAGE):
                 if have() >= expected:
                     return
                 if ctx.time_up():
                     raise TimeBudgetExpired()
-                _, rows = list_page(offset, opinion, **query)
-                if not rows:
-                    raise RuntimeError("empty audit filtered page")
-                store(rows, opinion)
-        if have() < expected:
-            # Smaller annual partitions break up large groups of tied rows.
-            for year in range(__import__('datetime').date.today().year, 1999, -1):
-                if have() >= expected:
-                    return
-                if ctx.time_up():
-                    raise TimeBudgetExpired()
-                total, rows = list_page(0, opinion, aimag_id=office, year=year)
-                if total is None:
-                    raise RuntimeError("audit annual list did not expose a total")
-                store(rows, opinion)
-                for offset in range(PAGE, total, PAGE):
-                    if ctx.time_up():
-                        raise TimeBudgetExpired()
-                    store(list_page(offset, opinion, aimag_id=office, year=year)[1], opinion)
+                _, page_rows = list_page(offset, opinion, **query)
+                if not page_rows:
+                    raise RuntimeError("empty audit partition page before reported total")
+                store(page_rows, opinion)
+                seen.update(str(r["id"]) for r in page_rows)
+                titles.extend(r["cells"][1] for r in page_rows if len(r["cells"]) > 1)
+            if len(seen) == total:
+                verified[token] = total
+            elif "q" not in query:
+                # Search terms come from the site's displayed titles. They
+                # split residual ties without guessing or enumerating IDs.
+                words = Counter(w.lower() for title in titles for w in re.findall(r"[^\W\d_]{4,}", title))
+                for word, _ in sorted(words.items(), key=lambda item: (item[1], -len(item[0])))[:24]:
+                    partition({**query, "q": word}, len(dimensions))
+                    if have() >= expected:
+                        return
+
+        partition({"aimag_id": office})
         if have() < expected:
             raise RuntimeError(f"audit office {office}: {have()} unique of {expected}")
 

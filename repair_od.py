@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 
 from crawlers.core import Http
 from crawlers.shilendans_common import REPORT, REPORTS, pages_all
+from od_partitions import collect_partitions
 
 REPO = 'mashbat1/gov-crawler'
 
@@ -63,24 +64,10 @@ def main():
     if not failed:
         print('No failed bulk tasks in the selected snapshot')
         return
-    http = Http(rate=0.5, timeout=300, retries=2)
-    groups, _ = pages_all(http, REPORT + '/reportGroups', {'sort': 'id,asc'}, size=500)
-    updates = {}
-    for task in failed:
-        fid, year, month = map(int, task.split(':'))
-        form = http.json(f'{REPORT}/reportForms/{fid}')
-        headers = [h['id'] for h in form.get('reportFormHeaders') or []]
-        body = {'reportFormId': fid, 'columns': headers, 'years': [year], 'months': [month],
-                'reportGroupIds': [g['id'] for g in groups], 'tez': [], 'ttz': [], 'orgs': []}
-        data = http.json(REPORTS + '/openData1', method='POST', json=body)
-        if not isinstance(data, list):
-            raise RuntimeError(f'{task}: invalid bulk response')
-        updates[(fid, year, month)] = [
-            {'form_id': fid, 'year': year, 'month': month, 'seq': seq, 'org_register': row.get('registerNo'),
-             'org_name': row.get('name'), 'line': row.get('line'),
-             'data': json.dumps({k: v for k, v in row.items() if len(k) <= 2 and k != 'id' and v not in (None, '')}, ensure_ascii=False)}
-            for seq, row in enumerate(data)]
-        print(f'{task}: {len(data)} rows retrieved', flush=True)
+    updates, repair_proof, repair_tag = collect_partitions(tag, failed, root)
+    if updates is None:
+        print("Repair paused at the time budget; verified checkpoints will resume", flush=True)
+        return
     gh('release', 'download', tag, '-p', '*.parquet', '-D', str(base))
     count, removed = replace_partitions(base / 'shilendans_od__od_rows.parquet', updates, output / 'shilendans_od__od_rows.parquet')
     import shutil
@@ -88,6 +75,9 @@ def main():
     manifest.update(base_release=tag, repaired_tasks={k: len(updates[tuple(map(int, k.split(':')))]) for k in failed},
                     replaced_old_rows=removed, crawled=dt.datetime.now(dt.timezone.utc).date().isoformat(), failed_items={}, failed_examples={})
     manifest['server_reported']['od_rows'] = count
+    manifest['coverage_scope'] = {'method': 'official bulk API partitioned by organisation directory',
+                                  'repair_proof': repair_proof,
+                                  'directory_scope_note': 'Every ID in the reconciled public organisation directory snapshot was queried.'}
     for table in manifest['tables']:
         path = output / f'shilendans_od__{table}.parquet'
         manifest['tables'][table] = {'rows': pq.ParquetFile(path).metadata.num_rows, 'bytes': path.stat().st_size}
@@ -99,6 +89,7 @@ def main():
     sizes = {a['name']: a['size'] for a in assets}
     if any(sizes.get(p.name) != p.stat().st_size for p in output.iterdir()):
         raise RuntimeError('Uploaded snapshot sizes do not match')
+    gh('release', 'delete', repair_tag, '--yes', '--cleanup-tag')
     print(f'Published and verified {final_tag}: {count} rows, no unresolved bulk tasks', flush=True)
 
 

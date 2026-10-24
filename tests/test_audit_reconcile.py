@@ -6,6 +6,29 @@ from crawlers.core import Ctx, TimeBudgetExpired
 
 
 class AuditTests(unittest.TestCase):
+    def test_native_subpartitions_recover_rows_when_parent_paging_repeats(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = Ctx("audit", d)
+            ctx.state.update(total=21, audit_ids={str(n): "Office" for n in range(1, 21)},
+                             opinion_totals={}, offices={"10": "Office"}, reconcile_bootstrapped=True)
+            ctx.state["attempts"]["reconcile"] = {"|10": 3}
+            ctx.state["errors"]["reconcile"] = {"|10": "old unstable pagination failure"}
+            def row(n):
+                return {"id": n, "url": f"https://www.audit.mn/audit/report_detail/{n}",
+                        "cells": [str(n), "Public report", "Office", "Financial audit"]}
+            calls = []
+            def listing(offset, opinion="", **query):
+                calls.append((offset, query))
+                return (1, [row(21)]) if query.get("audit_category") == 1 else (21, [row(n) for n in range(1, 21)])
+            try:
+                with patch.object(audit, "list_page", side_effect=listing):
+                    self.assertTrue(audit.reconcile(ctx))
+                self.assertEqual(len(ctx.state["audit_ids"]), 21)
+                self.assertTrue(any(q.get("audit_category") == 1 for _, q in calls))
+                self.assertEqual(ctx.state["errors"]["reconcile"], {})
+            finally:
+                ctx.close()
+
     def test_office_filter_recovers_a_row_skipped_by_global_pagination(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = Ctx('audit', d)
