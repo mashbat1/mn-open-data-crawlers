@@ -12,7 +12,7 @@ from crawlers.core import Ctx, log
 SOURCES = ["parliament", "xacxom", "legalinfo", "shuukh", "companies", "sanctions", "egazar", "iaac",
            "shilendans_eza", "shilendans_od", "shilendans_reports",
            "audit", "eiti", "cabinet", "ebarimt", "tender"]  # local-only sources and the authorised Tender API
-MAX_RUNS = 15
+MAX_RUNS = 100  # Full registry lookups can require about ten five-hour jobs.
 
 ap = argparse.ArgumentParser()
 ap.add_argument("source", choices=SOURCES)

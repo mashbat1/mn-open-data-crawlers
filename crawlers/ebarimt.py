@@ -18,6 +18,8 @@ def crawl(ctx):
 
     def one(reg):
         o = http.json(URL, params={"regno": reg})
+        if not isinstance(o, dict) or not isinstance(o.get("found"), bool):
+            raise RuntimeError("ebarimt returned an invalid lookup response")
         ctx.write("taxpayers", {"register": reg, **flat(o if isinstance(o, dict) else {"raw": o})})
 
     return ctx.run_items("lookups", regs if not ctx.sample else regs[:3], one, workers=2)

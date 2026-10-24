@@ -7,7 +7,7 @@ on:
       source:
         required: true
         type: choice
-        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports, tender]
+        options: [parliament, xacxom, legalinfo, shuukh, companies, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports, ebarimt, tender]
       sample:
         type: boolean
         default: false
@@ -40,9 +40,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DATA_TOKEN }}
         run: python ci.py restore "$SRC"
+      - name: Company registers for ebarimt
+        if: ${{ inputs.source == 'ebarimt' }}
+        env:
+          GH_TOKEN: ${{ secrets.DATA_TOKEN }}
+        run: |
+          mkdir -p inputs
+          tag=$(gh release list -R "$DATA_REPO" --limit 100 --json tagName,createdAt --jq '[.[]|select(.tagName|startswith("lookup-inputs-"))]|sort_by(.createdAt)|last|.tagName')
+          [ -n "$tag" ] && [ "$tag" != "null" ] || { echo "Prepare lookup inputs first"; exit 1; }
+          gh release download "$tag" -R "$DATA_REPO" -D inputs -p ebarimt_registers.json -p input_manifest.json
       - name: Crawl
         env:
           GH_TOKEN: ${{ secrets.DATA_TOKEN }}
+          EBARIMT_REGISTERS: inputs/ebarimt_registers.json
           TENDER_API_TOKEN: ${{ secrets.TENDER_API_TOKEN }}
           TENDER_API_BASE: ${{ vars.TENDER_API_BASE || 'https://opendata.tender.gov.mn/api' }}
         run: python run.py "$SRC" ${{ inputs.sample && '--sample --budget-min 15' || '--budget-min 315' }}
