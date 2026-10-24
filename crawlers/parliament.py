@@ -12,14 +12,29 @@ http = Http(rate=1.5, timeout=90)
 
 
 def pages(url, params=None, page_size=100, sample=False):
-    """DRF-style lists: follows `next`, else increments `page` until a short page."""
+    """Follow DRF links or the meetings API's capped nested pagination."""
     params = dict(params or {})
     params.update(page=1, page_size=page_size)
+    received = 0
     while True:
         o = http.json(url, params=params)
         rows = items_of(o)
+        received += len(rows)
         yield o, rows
-        if sample or not rows:
+        if sample:
+            return
+        pagination = o.get("pagination") if isinstance(o, dict) else None
+        if isinstance(pagination, dict):
+            total = pagination.get("total_items")
+            if pagination.get("has_next"):
+                if not rows:
+                    raise RuntimeError("Parliament pagination has an empty intermediate page")
+                params["page"] = int(pagination["page"]) + 1
+                continue
+            if isinstance(total, int) and received != total:
+                raise RuntimeError(f"Parliament pagination returned {received} of {total} rows")
+            return
+        if not rows:
             return
         nxt = o.get("next") if isinstance(o, dict) else None
         if nxt:
@@ -60,6 +75,16 @@ def crawl(ctx):
             for _, rows in pages(f"{BASE}/meeting/public/meetings/", {"session": s["key"]}, sample=ctx.sample):
                 for r in rows:
                     ctx.write("meetings", flat({**r, "session": s["key"]}))
+        # The unfiltered public listing also exposes meetings absent from the
+        # session-filtered lists. Preserve both and deduplicate by meeting ID.
+        for o, rows in pages(f"{BASE}/meeting/public/meetings/", sample=ctx.sample):
+            ctx.expect("meetings_public", (o.get("pagination") or {}).get("total_items"))
+            for r in rows:
+                ctx.write("meetings", flat(r))
+        ctx.state.setdefault("coverage_scope", {})["meetings"] = {
+            "method": "public unfiltered and session-filtered listings",
+            "historical_meeting_index_is_not_a_detail_completeness_count": True,
+        }
         for o, rows in pages(f"{BASE}/meeting/public-agendas/", sample=ctx.sample):
             if isinstance(o, dict) and o.get("count"):
                 ctx.expect("agendas", o["count"])
