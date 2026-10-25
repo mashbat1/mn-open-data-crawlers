@@ -130,6 +130,11 @@ def reconcile(ctx):
                 opinions[opinion][rid] = True
                 ctx.write("audit_opinions", {"id": row["id"], "opinion": opinion})
 
+    discoveries = os.path.join(ctx.workdir, "discovered_offsets.json")
+    if os.path.exists(discoveries):
+        with open(discoveries, encoding="utf-8") as source:
+            store(json.load(source).get("rows", []), "")
+
     def one(key):
         opinion, office = key.split("|")
         name = st["offices"][office]
@@ -266,4 +271,8 @@ def reconcile(ctx):
         raise RuntimeError("audit has unresolved duplicate/missing list rows")
     if complete and any(len(opinions.get(op, {})) < n for op, n in st["opinion_totals"].items()):
         raise RuntimeError("audit has unresolved opinion rows")
+    if complete and len(known) == st["total"] and all(len(opinions.get(op, {})) == n for op, n in st["opinion_totals"].items()):
+        for key in list(st.get("errors", {}).get("reconcile", {})):
+            ctx.done_set("reconcile").add(key)
+        st.setdefault("errors", {})["reconcile"] = {}
     return complete

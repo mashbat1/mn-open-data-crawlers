@@ -8,6 +8,7 @@ from pathlib import Path
 
 from crawlers.core import Http
 from crawlers.shilendans_common import INTEG
+from crawlers.shilendans_common import pages_all
 
 ROOT = Path("work_shilendans_eza/monthly_reconciliation/2026-05")
 PARAMS = {"startDate": "2026/05/01", "endDate": "2026/05/31", "supplierType": "",
@@ -30,6 +31,14 @@ def merge_groups(groups):
         amount = row["amount"]
         row["amount"] = int(amount) if amount == amount.to_integral_value() else str(amount)
     return list(merged.values())
+
+
+def payer_totals(rows):
+    if not rows or any(row.get("transactionCount") is None or row.get("transactionAmount") is None for row in rows):
+        raise RuntimeError("Missing official payer counts or amounts")
+    count = sum(int(row["transactionCount"]) for row in rows)
+    amount = sum((Decimal(str(row["transactionAmount"])) for row in rows), Decimal(0))
+    return count, int(amount) if amount == amount.to_integral_value() else str(amount)
 
 
 def main():
@@ -93,6 +102,28 @@ def main():
         raw += len(rows)
         print(f"economic codes {number}/{len(values)}: {raw} grouped supplier rows", flush=True)
     merged = merge_groups(groups)
+    supplemental_proof = []
+    supplement_file = Path(arguments.workdir) / "reconciliation_supplements" / (arguments.period + ".json")
+    if supplement_file.exists():
+        for supplement in json.loads(supplement_file.read_text(encoding="utf-8")):
+            register = str(supplement["register"])
+            if any(str(row.get("register")) == register for row in merged):
+                raise RuntimeError("Supplement overlaps an already aggregated supplier")
+            params = {"startDate": PARAMS["startDate"], "endDate": PARAMS["endDate"], "registerNo": register}
+            payers, payer_total = pages_all(http, INTEG + "/integrationECopyCredits/getSupplierOne", params, size=1000)
+            if payer_total is None or len(payers) != payer_total:
+                raise RuntimeError("Supplemental payer list is not complete")
+            count, amount = payer_totals(payers)
+            row = {"register": register, "name": supplement["supplier_name"], "count": count, "amount": amount,
+                   "recovered_from_payer_aggregates": True, "name_source": supplement["name_source"],
+                   "payer_rows": payers, "raw_supplier_metadata_available": False}
+            merged.append(row)
+            evidence = {"register": register, "payer_url": INTEG + "/integrationECopyCredits/getSupplierOne",
+                        "params": params, "payer_rows": payers, "count": count, "amount": amount,
+                        "name_source": supplement["name_source"], "raw_supplier_metadata_available": False}
+            encoded_evidence = json.dumps(evidence, ensure_ascii=False, sort_keys=True)
+            (ROOT / f"supplement_{register}.json").write_text(encoded_evidence, encoding="utf-8")
+            supplemental_proof.append({**evidence, "sha256": hashlib.sha256(encoded_evidence.encode()).hexdigest()})
     base_folder = ROOT.parents[1] / "monthly_pages" / arguments.period
     historical_baseline = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(base_folder.glob("page_*.json"))]
     # Spring infers the supplier count from a short last page; full pages
@@ -127,9 +158,10 @@ def main():
              "reported_transaction_total": transaction_total,
              "terminal_short_page_verified": terminal_valid,
              "public_economic_codes": values, "baseline_mismatches": mismatches,
+             "supplemental_payer_recovery": supplemental_proof,
              "query_failures": query_failures,
              "verified": terminal_valid and len(merged) == expected and actual_transactions == transaction_total and mismatches == 0,
-             "method": "sum of every economic code exposed by the official public UI"}
+             "method": "public economic-code aggregates, with explicitly documented official payer recovery when needed"}
     proof["historical_cache_rows"] = sum(len(page["rows"]) for page in historical_baseline)
     encoded = json.dumps(merged, ensure_ascii=False)
     proof["rows_sha256"] = hashlib.sha256(encoded.encode()).hexdigest()

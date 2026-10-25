@@ -9,6 +9,14 @@ from crawlers.core import Ctx
 
 
 class LegalViewTests(unittest.TestCase):
+    def test_modern_act_without_inner_class_is_still_read(self):
+        html = '<div class="main-huuliin-content"><div class="nom-more-header">Toolbar</div><p>Actual law</p><a class="print-zuil">Print</a></div><footer>Unrelated</footer>'
+        self.assertEqual(legalinfo.act_text(html), ("Actual law", "main-huuliin-content"))
+
+    def test_empty_act_does_not_become_toolbar_or_footer_text(self):
+        html = '<div class="main-huuliin-content"><div class="law_content"><div class="nom-more-header">Toolbar</div></div></div><footer>Unrelated</footer>'
+        self.assertEqual(legalinfo.act_text(html), ("", None))
+
     def test_failed_default_view_retries_official_original_html(self):
         with tempfile.TemporaryDirectory() as directory:
             ctx = Ctx("legalinfo", directory)
