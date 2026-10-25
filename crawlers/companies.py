@@ -21,6 +21,18 @@ KEYS = {"od_catalog": ["id"], "companies": ["registry_row"], "liquidated": ["sou
 http = Http(rate=2.0, timeout=600)
 
 
+def lifecycle_preflight(deadline=None):
+    """Check the separate registry service before downloading the large dump."""
+    client = Http(rate=0.2, timeout=20, retries=0)
+    client.deadline = deadline
+    body = client.json(f"{BURTGEL}/les/table", params={"draw": 1, "start": 0, "length": 1})
+    if (not isinstance(body, dict) or "recordsTotal" not in body or not isinstance(body.get("data"), list)
+            or not isinstance(body["recordsTotal"], int) or body["recordsTotal"] < 0
+            or (body["recordsTotal"] > 0 and not body["data"])):
+        raise RuntimeError("Registration authority did not return a valid public data table")
+    return body["recordsTotal"]
+
+
 def catalog(ctx):
     page, items = 1, []
     while True:
@@ -69,6 +81,9 @@ def registry_record(rec, names, index):
 
 
 def crawl(ctx):
+    if ctx.source == "companies":
+        count = lifecycle_preflight(ctx.deadline)
+        ctx.state["lifecycle_preflight"] = {"url": BURTGEL + "/les/table", "recordsTotal": count}
     items = catalog(ctx)
     for it in items:
         ctx.write("od_catalog", flat(it))

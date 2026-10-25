@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 import gzip
 import subprocess
+import hashlib
+import sys
 
 from .core import Http, flat, log
 from .shilendans_common import INTEG, pages_all
@@ -17,6 +19,37 @@ FIRST_YEAR = 2023
 KEYS = {"eza_suppliers": ["period", "register", "name"], "eza_supplier_orgs": ["period", "register", "org_name"]}
 http = Http(rate=2.0, timeout=30, retries=1)
 ROW_FILTERS = {"eza_suppliers": lambda row: bool(re.fullmatch(r"\d{4}-\d{2}", row.get("period", "")))}
+
+
+def row_filters(state):
+    identities = {period: {tuple(key) for key in keys}
+                  for period, keys in state.get("reconciled_period_keys", {}).items()}
+    def keep(row):
+        period = row.get("period", "")
+        return ROW_FILTERS["eza_suppliers"](row) and (
+            period not in identities or (str(row.get("register") or ""), row.get("name") or "") in identities[period])
+    return {"eza_suppliers": keep}
+
+
+def reconciled_period(workdir, period):
+    folder = Path(workdir) / "monthly_reconciliation" / period
+    proof_path = folder / "proof.json"
+    if not proof_path.exists():
+        return None
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    if not proof.get("verified"):
+        return None
+    encoded = (folder / "reconciled_rows.json").read_bytes()
+    if hashlib.sha256(encoded).hexdigest() != proof.get("rows_sha256"):
+        raise RuntimeError(f"{period}: reconciled rows checksum mismatch")
+    rows = json.loads(encoded)
+    keys = {(str(row.get("register") or ""), row.get("name") or "") for row in rows}
+    transaction_total = proof.get("reported_transaction_total", max(proof.get("reported_totals", [0])))
+    if (proof.get("period") != period or len(keys) != len(rows) or len(rows) != proof.get("expected")
+            or sum(int(row["count"]) for row in rows) != transaction_total
+            or not proof.get("terminal_short_page_verified") or proof.get("baseline_mismatches") != 0):
+        raise RuntimeError(f"{period}: invalid independent monthly reconciliation")
+    return rows, proof
 
 
 def registers_from_parts(paths):
@@ -37,7 +70,11 @@ def validate_snapshot(state, workdir):
         totals = {json.loads(p.read_text(encoding="utf-8"))["meta"]["totalElements"]
                   for p in directory.glob("page_*.json")}
         if len(totals) > 1:
-            raise RuntimeError(f"{directory.name}: conflicting source totals {sorted(totals)}")
+            proof = state.get("reconciled_period_proofs", {}).get(directory.name)
+            if not proof or not proof.get("verified") or directory.name not in state.get("reconciled_period_keys", {}):
+                raise RuntimeError(f"{directory.name}: conflicting source totals {sorted(totals)}")
+            if reconciled_period(workdir, directory.name) is None:
+                raise RuntimeError(f"{directory.name}: reconciliation evidence is unavailable")
 
 
 def periods():
@@ -83,6 +120,24 @@ def crawl(ctx):
             log("rebuilt monthly supplier registers:", {year: len(regs) for year, regs in rebuilt.items()})
         st["monthly_union_version"] = 1
     st.setdefault("year_regs", {})
+    if not st.get("monthly_integrity_version"):
+        counts = {}
+        files = list((Path(ctx.workdir) / "monthly_bootstrap").glob("*.gz")) + list(Path(ctx.parts).glob("eza_suppliers.*.gz"))
+        for path in files:
+            with gzip.open(path, "rt", encoding="utf-8") as source:
+                for line in source:
+                    row = json.loads(line)
+                    if ROW_FILTERS["eza_suppliers"](row):
+                        counts.setdefault(row["period"], set()).add((str(row.get("register") or ""), row.get("name") or ""))
+        repair = {period for period, keys in counts.items()
+                  if len(keys) != st.get("expect", {}).get("eza_suppliers:" + period)}
+        repair.update(key for key in st.get("errors", {}).get("periods", {}) if len(key) == 7)
+        st["monthly_integrity_periods"] = sorted(repair)
+        for period in repair:
+            ctx.done_set("periods").discard(period)
+            st.setdefault("attempts", {}).setdefault("periods", {})[period] = 0
+        st["monthly_integrity_version"] = 1
+        log("monthly identity reconciliation:", sorted(repair))
     plist = periods()
 
     def one_period(p):
@@ -91,8 +146,25 @@ def crawl(ctx):
         def progress(n, total):
             if n % 1000 == 0 or n == total:
                 log(f"{period}: {n}/{total} supplier rows")
-        rows, total = pages_all(http, SUPPLIERS, params, size=100, on_page=progress,
-                                cache_dir=Path(ctx.workdir) / "monthly_pages" / period)
+        recovered = reconciled_period(ctx.workdir, period)
+        if recovered is None and period in st.get("monthly_integrity_periods", []):
+            folder = Path(ctx.workdir) / "monthly_reconciliation" / period
+            folder.mkdir(parents=True, exist_ok=True)
+            with open(folder / "runner.log", "w", encoding="utf-8") as output:
+                subprocess.run([sys.executable, "-u", "reconcile_eza.py", "--period", period, "--workdir", str(ctx.workdir)],
+                               stdout=output, stderr=subprocess.STDOUT, check=True)
+            recovered = reconciled_period(ctx.workdir, period)
+            if recovered is None:
+                raise RuntimeError(f"{period}: independent code and source counts do not reconcile; see proof.json")
+        if recovered is not None:
+            rows, proof = recovered
+            total = proof["expected"]
+            st.setdefault("reconciled_period_proofs", {})[period] = proof
+            st.setdefault("reconciled_period_keys", {})[period] = [[str(row.get("register") or ""), row.get("name") or ""] for row in rows]
+            log(f"{period}: independently verified {total} suppliers, {proof['transactions']} transactions")
+        else:
+            rows, total = pages_all(http, SUPPLIERS, params, size=100, on_page=progress,
+                                    cache_dir=Path(ctx.workdir) / "monthly_pages" / period)
         if total is not None and len(rows) < total:
             raise RuntimeError(f"{period}: {len(rows)} of {total}")
         ctx.expect(f"eza_suppliers:{period}", total if total is not None else len(rows))
@@ -121,5 +193,6 @@ def crawl(ctx):
     if complete:
         ctx.expect("eza_suppliers", sum(st["expect"][f"eza_suppliers:{period}"] for period, _, _ in plist))
     st["coverage_scope"] = {"supplier_periods": [p[0] for p in plist],
-                            "annual_totals": "sum of verified monthly supplier lists; legacy annual lists excluded"}
+                            "annual_totals": "sum of verified monthly supplier lists; legacy annual lists excluded",
+                            "monthly_reconciliation": st.get("reconciled_period_proofs", {})}
     return complete

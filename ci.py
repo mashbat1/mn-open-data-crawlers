@@ -178,9 +178,10 @@ def finalize(src):
                 "server_reported": state.get("expect", {}),
                 "failed_items": {k: len(v) for k, v in state.get("errors", {}).items() if v},
                 "failed_examples": {k: dict(list(v.items())[:5]) for k, v in state.get("errors", {}).items() if v}}
+    filters = source.row_filters(state) if hasattr(source, "row_filters") else getattr(source, "ROW_FILTERS", {})
     for table, files in by_table.items():
         path = os.path.join(out, f"{src}__{table}.parquet")
-        n = write_table(files, keys.get(table), path, keep=getattr(source, "ROW_FILTERS", {}).get(table),
+        n = write_table(files, keys.get(table), path, keep=filters.get(table),
                         file_versions=file_versions)
         manifest["tables"][table] = {"rows": n, "bytes": os.path.getsize(path)}
         print(f"{table}: {n} rows, {os.path.getsize(path) / 1e6:.1f} MB")

@@ -15,7 +15,7 @@ import time
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("source", choices=["audit", "eiti", "cabinet", "ebarimt", "tender", "shilendans_eza"])
+    ap.add_argument("source", choices=["audit", "eiti", "cabinet", "ebarimt", "tender", "shilendans_eza", "companies"])
     ap.add_argument("--budget-min", type=float, default=30)
     ap.add_argument("--max-runs", type=int, default=48)
     ap.add_argument("--keep-local", action="store_true")

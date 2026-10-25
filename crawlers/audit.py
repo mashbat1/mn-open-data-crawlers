@@ -84,10 +84,10 @@ def crawl(ctx):
 def reconcile(ctx):
     """The global list swaps tied rows between pages. Reconcile by the site's public office/type filters."""
     st = ctx.state
-    if st.get("reconcile_version", 0) < 5:
-        st["reconcile_version"] = 5
-        st["reconcile_v5_prior_errors"] = dict(st.get("errors", {}).get("reconcile", {}))
-        for key in st["reconcile_v5_prior_errors"]:
+    if st.get("reconcile_version", 0) < 6:
+        st["reconcile_version"] = 6
+        st["reconcile_v6_prior_errors"] = dict(st.get("errors", {}).get("reconcile", {}))
+        for key in st["reconcile_v6_prior_errors"]:
             st["attempts"].setdefault("reconcile", {})[key] = 0
     known = st.setdefault("audit_ids", {})
     opinions = st.setdefault("opinion_ids", {})
@@ -224,6 +224,19 @@ def reconcile(ctx):
                 store(page_rows, opinion)
                 seen.update(str(r["id"]) for r in page_rows)
                 titles.extend(r["cells"][1] for r in page_rows if len(r["cells"]) > 1)
+            if len(seen) < total:
+                # Offset is the public route's cursor, not a report ID. Shift
+                # page boundaries to recover ties skipped by LIMIT/OFFSET sorts.
+                for offset in range(PAGE // 2, total, PAGE):
+                    if have() >= expected:
+                        return
+                    if ctx.time_up():
+                        raise TimeBudgetExpired()
+                    _, page_rows = list_page(offset, opinion, **query)
+                    store(page_rows, opinion)
+                    seen.update(str(r["id"]) for r in page_rows)
+                    if len(seen) >= total:
+                        break
             if len(seen) == total:
                 verified[token] = total
             elif "q" not in query:
