@@ -22,14 +22,29 @@ WORK = os.environ.get("WORKDIR", "work")
 
 
 def gh(*args, check=True, capture=False):
-    r = subprocess.run(["gh", *args, "-R", REPO], text=True, capture_output=True)
+    for attempt in range(4):
+        r = subprocess.run(["gh", *args, "-R", REPO], text=True, capture_output=True)
+        transient = any(marker in r.stderr.lower() for marker in
+                        ("http 429", "http 500", "http 502", "http 503", "http 504", "timed out",
+                         "timeout", "connection reset", "tls handshake", "temporary failure"))
+        if r.returncode == 0 or not transient:
+            break
+        if attempt < 3:
+            time.sleep(2 ** (attempt + 1))
     if check and r.returncode != 0:
         raise SystemExit(f"gh {' '.join(args[:3])} failed: {r.stderr.strip()[:500]}")
     return r.stdout if capture else r.returncode
 
 
 def release_exists(tag):
-    return gh("release", "view", tag, check=False, capture=False) == 0
+    try:
+        gh("release", "view", tag, capture=True)
+        return True
+    except SystemExit as exc:
+        if "http 404" in str(exc).lower() or "release not found" in str(exc).lower():
+            return False
+        # A GitHub outage must never be interpreted as an absent checkpoint.
+        raise
 
 
 def upload(tag, files):

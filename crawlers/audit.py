@@ -84,10 +84,10 @@ def crawl(ctx):
 def reconcile(ctx):
     """The global list swaps tied rows between pages. Reconcile by the site's public office/type filters."""
     st = ctx.state
-    if st.get("reconcile_version", 0) < 4:
-        st["reconcile_version"] = 4
-        st["reconcile_v4_prior_errors"] = dict(st.get("errors", {}).get("reconcile", {}))
-        for key in st["reconcile_v4_prior_errors"]:
+    if st.get("reconcile_version", 0) < 5:
+        st["reconcile_version"] = 5
+        st["reconcile_v5_prior_errors"] = dict(st.get("errors", {}).get("reconcile", {}))
+        for key in st["reconcile_v5_prior_errors"]:
             st["attempts"].setdefault("reconcile", {})[key] = 0
     known = st.setdefault("audit_ids", {})
     opinions = st.setdefault("opinion_ids", {})
@@ -144,6 +144,43 @@ def reconcile(ctx):
         store(rows, opinion)
         if have() >= expected:
             return
+        # Exhaustive title-derived public searches can separate date-tied rows
+        # that repeat across every normal page. Persist each query independently
+        # so a budget pause does not start the search vocabulary over again.
+        vocab = st.setdefault("office_search_vocabulary", {})
+        if office not in vocab:
+            titles = []
+            for path in glob.glob(os.path.join(ctx.parts, "audits.*.jsonl.gz")):
+                if any(s.f and s.f.name == path for s in ctx.sinks.values()):
+                    continue
+                with gzip.open(path, "rt", encoding="utf-8") as source:
+                    for line in source:
+                        record = json.loads(line)
+                        if record.get("office") == name:
+                            titles.append(record.get("title") or "")
+            terms = Counter(term.lower() for title in titles for term in re.findall(r"[^\W_]{2,}", title))
+            if terms:
+                vocab[office] = sorted(terms, key=lambda term: (terms[term], -len(term), term))
+        if vocab.get(office):
+            def search(term):
+                if have() >= expected:
+                    return
+                total, first = list_page(0, opinion, aimag_id=office, q=term)
+                if total is None:
+                    raise RuntimeError("audit title search has no total")
+                store(first, opinion)
+                if total <= 100:
+                    for offset in range(PAGE, total, PAGE):
+                        if have() >= expected:
+                            return
+                        if ctx.time_up():
+                            raise TimeBudgetExpired()
+                        store(list_page(offset, opinion, aimag_id=office, q=term)[1], opinion)
+            searched = ctx.run_items("office_search:" + key, vocab[office], search, workers=2)
+            if have() >= expected:
+                return
+            if not searched and ctx.time_up():
+                raise TimeBudgetExpired()
         verified = st.setdefault("verified_audit_partitions", {})
         dimensions = [("audit_category", (1, 2, 3, 4, 5, 6)),
                       ("audit_report_type", (1, 2, 3, 5)),

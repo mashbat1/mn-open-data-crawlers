@@ -90,6 +90,10 @@ def list_page(cat, active, page, start=None, end=None, order="asc"):
 def crawl(ctx):
     complete = True
     st = ctx.state
+    if st.get("detail_view_version", 0) < 1:
+        st["detail_view_version"] = 1
+        for key in st.get("errors", {}).get("detail", {}):
+            st.setdefault("attempts", {}).setdefault("detail", {})[key] = 0
     if st.get("metadata_parser_version", 0) < 2:
         st["metadata_parser_version"] = 2
         # Refresh metadata emitted by the earlier parser; detail text is independent.
@@ -165,15 +169,31 @@ def crawl(ctx):
     complete &= ctx.run_items("windows", gaps, windows, workers=2)
 
     def detail(law_id):
-        html = http.get(f"{BASE}/detail", params={"lawId": law_id}).text
+        # The official alternate HTML view recovers legacy acts whose default
+        # consolidated view crashes. Record the view, rather than claiming that
+        # an original text is the current consolidated version.
+        old_error = st.get("errors", {}).get("detail", {}).get(law_id, "")
+        modes = [1, None] if "HTTP 500" in old_error else [None, 1]
+        last_error = None
+        for mode in modes:
+            params = {"lawId": law_id, **({"showType": mode} if mode is not None else {})}
+            try:
+                response = http.get(f"{BASE}/detail", params=params)
+                html = response.text
+                text = html_text(html, root_class="law_content", drop_classes=("nom-more-header", "media-link"))
+                if not text:
+                    raise RuntimeError("no text in official HTML view")
+                break
+            except RuntimeError as exc:
+                last_error = exc
+        else:
+            raise last_error
         title = re.search(r"<title>(.*?)</title>", html, re.S)
         crumb = re.search(r'breadcrumb">(.*?)</(?:ul|ol|div)>', html, re.S)
         unid = re.search(r'data-unid="([^"]+)"', html)
-        text = html_text(html, root_class="law_content", drop_classes=("nom-more-header", "media-link"))
-        if not text:
-            raise RuntimeError("no text")
         ctx.write("texts", {"law_id": law_id, "title": strip_tags(title.group(1)) if title else None,
-                            "breadcrumb": strip_tags(crumb.group(1)) if crumb else None, "chars": len(text), "text": text})
+                            "breadcrumb": strip_tags(crumb.group(1)) if crumb else None, "chars": len(text), "text": text,
+                            "source_url": response.url, "html_view": "showType=1" if mode == 1 else "default"})
         if unid:
             o = http.post(f"{BASE}/lawConnectedTypeData", data={"dvid": unid.group(1), "type": 2, "lawId": law_id}).json()
             h = o.get("Html") if isinstance(o, dict) else str(o)

@@ -2,6 +2,8 @@
 from decimal import Decimal
 import hashlib
 import json
+import argparse
+import calendar
 from pathlib import Path
 
 from crawlers.core import Http
@@ -30,6 +32,14 @@ def merge_groups(groups):
 
 
 def main():
+    global ROOT, PARAMS
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--period", default="2026-05")
+    arguments = parser.parse_args()
+    year, month = map(int, arguments.period.split("-"))
+    end_day = calendar.monthrange(year, month)[1]
+    ROOT = ROOT.parent / arguments.period
+    PARAMS = {**PARAMS, "startDate": f"{year}/{month:02d}/01", "endDate": f"{year}/{month:02d}/{end_day}"}
     ROOT.mkdir(parents=True, exist_ok=True)
     http = Http(rate=0.5, timeout=30, retries=1)
     codes = http.json(INTEG + "/integrationECopyCredits/eza", params=PARAMS)
@@ -81,7 +91,7 @@ def main():
         raw += len(rows)
         print(f"economic codes {number}/{len(values)}: {raw} grouped supplier rows", flush=True)
     merged = merge_groups(groups)
-    base_folder = ROOT.parents[1] / "monthly_pages/2026-05"
+    base_folder = ROOT.parents[1] / "monthly_pages" / arguments.period
     baseline = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(base_folder.glob("page_*.json"))]
     reported_totals = {page["meta"]["totalElements"] for page in baseline}
     expected = min(reported_totals)
@@ -95,7 +105,7 @@ def main():
             if (not found or found["count"] != row["count"] or
                     abs(Decimal(str(found["amount"])) - Decimal(str(row["amount"]))) > Decimal("0.01")):
                 mismatches += 1
-    proof = {"period": "2026-05", "expected": expected, "unique_suppliers": len(merged),
+    proof = {"period": arguments.period, "expected": expected, "unique_suppliers": len(merged),
              "reported_totals": sorted(reported_totals), "transactions": actual_transactions,
              "public_economic_codes": values, "baseline_mismatches": mismatches,
              "query_failures": query_failures,
