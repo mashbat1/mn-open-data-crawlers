@@ -138,7 +138,9 @@ def write_table(files, key_cols, path, chunk=200_000, keep=None, file_versions=N
                 r = json.loads(line)
                 if keep is not None and not keep(r):
                     continue
-                k = tuple(str(r.get(c)) for c in key_cols) if key_cols else hashlib.md5(line.encode()).digest()
+                # a 12-byte digest keeps tens of millions of keys within the runner's memory
+                k = int.from_bytes(hashlib.blake2b(("\x1f".join(str(r.get(c)) for c in key_cols) if key_cols else line)
+                                                   .encode(), digest_size=12).digest(), "big")
                 if k in seen:
                     continue
                 seen.add(k)

@@ -11,7 +11,8 @@ from crawlers.core import Ctx, TimeBudgetExpired, log, should_continue
 
 SOURCES = ["parliament", "xacxom", "legalinfo", "shuukh", "companies", "registry", "sanctions", "egazar", "iaac",
            "shilendans_eza", "shilendans_od", "shilendans_reports",
-           "audit", "eiti", "cabinet", "ebarimt", "tender", "tender_archive"]
+           "audit", "eiti", "cabinet", "ebarimt", "tender", "tender_archive", "opendatalab",
+           "supremecourt", "conscourt", "ub_khural", "csc", "mof", "opendata_gov", "frc", "cmcs", "election"]
 MAX_RUNS = 100  # Full registry lookups can require about ten five-hour jobs.
 
 ap = argparse.ArgumentParser()

@@ -8,7 +8,7 @@ on:
       source:
         required: true
         type: choice
-        options: [parliament, xacxom, legalinfo, shuukh, companies, registry, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports, ebarimt, eiti, tender, tender_archive]
+        options: [parliament, xacxom, legalinfo, shuukh, companies, registry, sanctions, egazar, iaac, shilendans_eza, shilendans_od, shilendans_reports, ebarimt, eiti, tender, tender_archive, opendatalab, supremecourt, conscourt, ub_khural, csc, mof, opendata_gov, frc, cmcs, election]
       sample:
         type: boolean
         default: false
