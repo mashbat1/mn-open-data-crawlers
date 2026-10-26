@@ -53,7 +53,10 @@ def row_hash(r):
 
 
 def get(path, method="GET"):
-    o = http.json(API + path, method=method)
+    r = http.request(method, API + path)
+    if r.status_code == 204 or not r.content.strip():  # 204 No Content: the entity has no published detail
+        return []
+    o = r.json()
     if o is None:
         return []
     return o

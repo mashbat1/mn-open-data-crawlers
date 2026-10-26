@@ -251,9 +251,13 @@ def parse_file(data, ext):
 
 def fetch_and_parse(ctx, client, f, rows_table, files_table, extra=None):
     """Download one resource and write its rows; parse problems are recorded, network errors raise."""
-    data = download(client, f["path"])
     stat = {"file_id": f["file_id"], "detail_id": f["detail_id"], "url": media_url(f["path"]),
             "declared_size": f.get("size"), **(extra or {})}
+    try:
+        data = download(client, f["path"])
+    except NotFound:  # listed in the catalogue but the file is gone from the server
+        ctx.write(files_table, {**stat, "error": "missing on server (HTTP 404)", "rows": 0})
+        return
     if data is None:
         ctx.write(files_table, {**stat, "error": f"larger than {MAX_BYTES} bytes on download", "rows": 0})
         return

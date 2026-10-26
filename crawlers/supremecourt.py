@@ -12,7 +12,8 @@ import re
 from .core import Http, flat, html_text, log, strip_tags
 
 BASE = "https://supremecourt.mn/mn"
-KEYS = {"decisions": ["id"], "hearings": ["id"], "dissents": ["print_id", "tp", "s"], "advice": ["id"]}
+KEYS = {"decisions": ["id"], "hearings": ["id"], "dissents": ["print_id", "tp", "s"], "advice": ["id"],
+        "unavailable": ["scope"]}
 FIRST_MONTH = (2019, 1)      # the calendar and the decision list are dense from 2019; earlier dates fetched at once
 EARLY = ("1990-01-01", "2018-12-31")
 ADVICE_TYPES = {1: "Тайлбар", 2: "Зөвлөмж", 3: "Тойм"}
@@ -52,13 +53,35 @@ def crawl(ctx):
     st = ctx.state
 
     # ---- resolutions: one list request per month returns every decision with its full text ----
-    def decisions(key):
-        a, b = month_range(key)
+    def fetch(a, b):
         o = http.get(f"{BASE}/getDecisions/", params={"datea": a, "dateb": b}).json()
         decs = o.get("decs")
         if not isinstance(decs, list):
             raise RuntimeError("unexpected getDecisions response")
-        reported = sum(int(c.get("cnt") or 0) for c in o.get("chamberCounts") or [])
+        return decs, sum(int(c.get("cnt") or 0) for c in o.get("chamberCounts") or [])
+
+    def decisions(key):
+        a, b = month_range(key)
+        try:
+            decs, reported = fetch(a, b)
+        except RuntimeError as e:
+            if "HTTP 500" not in str(e) or key == "early":
+                raise
+            # One broken record makes the server fail the whole month (2021-06-30 does): fetch day by day and
+            # list the days the server itself cannot return instead of retrying them forever.
+            decs, reported = [], 0
+            day, end = dt.date.fromisoformat(a), dt.date.fromisoformat(b)
+            while day <= end:
+                try:
+                    d_decs, d_rep = fetch(day.isoformat(), day.isoformat())
+                    decs += d_decs
+                    reported += d_rep
+                except RuntimeError as e2:
+                    if "HTTP 500" not in str(e2):
+                        raise
+                    ctx.write("unavailable", {"scope": f"decisions:{day.isoformat()}", "error": str(e2)[:200]})
+                    log(f"decisions {day}: the server fails this day ({str(e2)[:80]})")
+                day += dt.timedelta(days=1)
         ctx.expect(f"decisions:{key}", reported or len(decs))
         for d in decs:
             text = text_of(d.get("decisions"))
