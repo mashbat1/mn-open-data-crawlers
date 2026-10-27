@@ -65,6 +65,9 @@ def crawl(ctx):
         ctx.write("taxpayers", {"register": reg, **flat(o)})
 
     complete = ctx.run_items("lookups", regs if not ctx.sample else regs[:3], one, workers=2)
+    # The register list is refreshed between runs; registers looked up from an earlier list are rows too.
+    if not ctx.sample:
+        ctx.expect("taxpayers", len(ctx.done_set("lookups") | set(regs)))
     ctx.state["coverage_scope"] = {"registers": len(regs), "legacy_unavailable_count": len(fallbacks),
                                     "fallback": "official TIN/taxpayer registry; receipt fields remain unknown"}
     return complete

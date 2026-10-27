@@ -9,7 +9,7 @@ import os
 from collections import Counter
 import datetime as dt
 
-from .core import Http, TimeBudgetExpired, log, strip_tags
+from .core import Http, NotFound, TimeBudgetExpired, log, strip_tags
 
 BASE = "https://www.audit.mn/audit"
 OPINIONS = ["Өөрчлөлтгүй дүгнэлт", "Хязгаарлалтай дүгнэлт", "Сөрөг дүгнэлт", "Татгалзсан дүгнэлт"]
@@ -21,7 +21,10 @@ http = Http(rate=1.0, timeout=180, retries=8)
 def list_page(offset, opinion="", **filters):
     params = {"q": "", "cat": 0, "aimag_id": 0, "year": "", "audit_report_type": 0, "audit_category": 0,
               "audit_opinion_type": opinion, **filters}
-    html = http.get(f"{BASE}/{offset}", params=params).text
+    try:
+        html = http.get(f"{BASE}/{offset}", params=params).text
+    except NotFound:  # the site answers a filter or search with no hits with HTTP 404
+        return 0, []
     total = re.search(r"Нийт\s*<b[^>]*>\s*([\d,\s]+)", html)
     rows = []
     for href, tr in re.findall(r'<tr[^>]*clickable-row[^>]*data-href="([^"]+)"[^>]*>(.*?)</tr>', html, re.S):

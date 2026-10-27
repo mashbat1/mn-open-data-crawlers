@@ -7,7 +7,8 @@ from html.parser import HTMLParser
 from .core import Http, html_text, log, strip_tags
 
 BASE = "https://legalinfo.mn/mn"
-KEYS = {"acts": ["law_id", "category", "active"], "texts": ["law_id"], "links": ["law_id", "linked_law_id"]}
+KEYS = {"acts": ["law_id", "category", "active"], "texts": ["law_id"], "links": ["law_id", "linked_law_id"],
+        "unavailable": ["law_id"]}
 CATEGORIES = range(27, 47)      # filtercategorytypeid; code = id - 26 (27/1 laws, 33/7 gov. resolutions ...)
 ACTIVE = (1, 0, 2)              # in force, repealed, suspended
 PAGE = 20
@@ -198,6 +199,11 @@ def crawl(ctx):
             except RuntimeError as exc:
                 last_error = exc
         else:
+            if "HTTP 500" in str(last_error) and "HTTP 500" in old_error:
+                # Both official views fail on every attempt (mostly acts published only as PDF): record it.
+                ctx.write("unavailable", {"law_id": law_id, "url": f"{BASE}/detail?lawId={law_id}",
+                                          "error": str(last_error)[:200]})
+                return
             raise last_error
         title = re.search(r"<title>(.*?)</title>", html, re.S)
         crumb = re.search(r'breadcrumb">(.*?)</(?:ul|ol|div)>', html, re.S)
