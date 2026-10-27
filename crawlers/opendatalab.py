@@ -16,7 +16,7 @@ from .core import Http, NotFound, html_text, log, strip_tags
 BASE = "https://www.opendatalab.mn"
 PER_PAGE = 200
 KEYS = {"procurements": ["id"], "bidders": ["id"], "bidder_tenders": ["bidder_id", "procurement_id", "seq"],
-        "pages": ["url"]}
+        "pages": ["url"], "unavailable": ["url"]}
 http = Http(rate=0.1, timeout=180, retries=6)   # Crawl-delay: 10
 
 REGIONS = ["Архангай", "Баян-Өлгий", "Баянхонгор", "Булган", "Говь-Алтай", "Говьсүмбэр", "Дархан-Уул", "Дорноговь",
@@ -187,6 +187,12 @@ def crawl_sections(ctx):
             try:
                 html = get(path)
             except NotFound:
+                return
+            except RuntimeError as e:
+                if "HTTP 500" not in str(e):
+                    raise
+                # the server fails on this page every time (e.g. two local-election years): list it, don't loop
+                ctx.write("unavailable", {"url": BASE + path, "section": section, "error": str(e)[:200]})
                 return
             body = main_html(html)
             title = re.search(r"(?s)<title>(.*?)</title>", html)
