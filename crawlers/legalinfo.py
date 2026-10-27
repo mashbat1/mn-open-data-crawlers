@@ -194,12 +194,20 @@ def crawl(ctx):
                 html = response.text
                 text, content_root = act_text(html)
                 if not text:
+                    # some older acts are published only as scanned page images: record where they are
+                    images = re.findall(r'<img[^>]+src="(/uploads/images/[^"]+)"', html)
+                    if images:
+                        ctx.write("unavailable", {"law_id": law_id, "url": response.url,
+                                                  "error": "published only as scanned images",
+                                                  "images": ["https://legalinfo.mn" + i for i in images]})
+                        return
                     raise RuntimeError("no text in official HTML view")
                 break
             except RuntimeError as exc:
                 last_error = exc
         else:
-            if "HTTP 500" in str(last_error) and "HTTP 500" in old_error:
+            failing = ("HTTP 500", "no text")
+            if any(f in str(last_error) for f in failing) and any(f in old_error for f in failing):
                 # Both official views fail on every attempt (mostly acts published only as PDF): record it.
                 ctx.write("unavailable", {"law_id": law_id, "url": f"{BASE}/detail?lawId={law_id}",
                                           "error": str(last_error)[:200]})

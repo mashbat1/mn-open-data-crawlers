@@ -1,6 +1,9 @@
 """opendatalab.mn (Open Data Lab Mongolia, run by the NGO "Бодлогод залуусын хяналт") — a public archive of official
 data. Collected here:
   procurements      every procurement in the list (number, title, customer, budget, method, funding, date)
+  procurement_status  each procurement's status from the status filters (result published, cancelled, complaint upheld ...)
+  procurement_bids  the participants each list card shows with their bid price; the site marks each with a green
+                    (selected) or red (not selected) arrow. Recent tenders (from about late 2025) show none yet.
   bidders           every bidder page (name, activity, address) and the tenders it took part in with its outcome
                     (Шалгарсан = selected, Хасагдсан = rejected, Илгээгдсэн = submitted)
   pages             election, mining-licence, local-development-fund, licence and open-budget pages, as text plus
@@ -15,7 +18,8 @@ from .core import Http, NotFound, html_text, log, strip_tags
 
 BASE = "https://www.opendatalab.mn"
 PER_PAGE = 200
-KEYS = {"procurements": ["id"], "bidders": ["id"], "bidder_tenders": ["bidder_id", "procurement_id", "seq"],
+KEYS = {"procurements": ["id"], "procurement_bids": ["procurement_id", "seq"], "procurement_status": ["id"],
+        "bidders": ["id"], "bidder_tenders": ["bidder_id", "procurement_id", "seq"],
         "pages": ["url"], "unavailable": ["url"]}
 http = Http(rate=0.1, timeout=180, retries=6)   # Crawl-delay: 10
 
@@ -59,8 +63,20 @@ def money(s):
 
 
 # ---- procurements ----
-def list_page(page):
-    html = get(f"/procurement?per_page={PER_PAGE}&page={page}")
+def bids(card, pid):
+    m = re.search(r"(?s)<strong>\s*Оролцсон байгууллагууд:\s*</strong>(.*?)</p>", card)
+    out = []
+    found = re.findall(r'(?s)<svg[^>]*fill="(\w+)".*?</svg>(.*?)(?=<svg|$)', m.group(1) if m else "")
+    found = [(c, " ".join(strip_tags(t).split()).strip(" ,")) for c, t in found]
+    for seq, (colour, text) in enumerate([(c, t) for c, t in found if t and "оролцогч байхгүй" not in t], 1):
+        price = re.search(r"\((-?[\d,\.]*)\s*₮\)\s*$", text)   # "(₮)" when the site has no price
+        out.append({"procurement_id": pid, "seq": seq, "bidder": text[:price.start()].strip() if price else text,
+                    "bid": money(price.group(1)) if price else None, "marker": colour, "selected": colour == "green"})
+    return out
+
+
+def list_page(page, status=None):
+    html = get(f"/procurement?per_page={PER_PAGE}&page={page}" + (f"&status={status}" if status else ""))
     rows = []
     for pid, card in re.findall(r'(?s)href="/search/(\d+)\?model=TProcurement">(.*?)</a>', html):
         p = {strip_tags(k).strip(" :"): strip_tags(v).strip() for k, v in re.findall(r"(?s)<strong>([^<]*)</strong>(.*?)</p>", card)}
@@ -75,9 +91,15 @@ def list_page(page):
                      "funding_this_year": money(funding.group(1)) if funding else None,
                      "type": badges[0] if badges else None, "method": badges[1] if len(badges) > 1 else None,
                      "source_of_funds": badges[2] if len(badges) > 2 else None, "badges": "; ".join(badges),
-                     "list_page": page})
-    last = max([int(x) for x in re.findall(r"[?&]page=(\d+)", html)] + [page])
+                     "list_page": page, "bids": bids(card, int(pid)),
+                     "no_bids": "оролцогч байхгүй" in card})
+    last = max([int(x) for x in re.findall(r"[?&](?:amp;)?page=(\d+)", html)] + [page])
     return rows, last
+
+
+def statuses():
+    html = get("/procurement?per_page=10&page=1")
+    return dict(re.findall(r'href="/procurement\?[^"]*status=(\w+)">([^<]+)</a>', html))
 
 
 def crawl_procurements(ctx):
@@ -88,16 +110,44 @@ def crawl_procurements(ctx):
         ctx.save()
         log(f"procurements: {last} list pages of {PER_PAGE}")
     seen = st.setdefault("proc_ids", {})
+    if st.get("list_version", 1) < 2:
+        # version 1 dropped the participants and bid prices on each card: read the list again
+        st["list_version"] = 2
+        for k in ("done", "attempts", "errors"):
+            st.setdefault(k, {}).pop("procurement_pages", None)
+        ctx.save()
 
     def one(page):
         rows, _ = list_page(page)
         if not rows or (len(rows) < PER_PAGE and page != st["proc_pages"]):
             raise RuntimeError(f"page {page}: {len(rows)} rows")
         for r in rows:
+            for b in r.pop("bids"):
+                ctx.write("procurement_bids", b)
             ctx.write("procurements", r)
             seen[str(r["id"])] = 1
 
     ok = ctx.run_items("procurement_pages", range(1, st["proc_pages"] + 1), one, workers=1)
+
+    # The status (result published, cancelled, complaint upheld ...) is only a list filter, not on the cards.
+    if "status_pages" not in st:
+        st["status_pages"] = {}
+        for code, label in statuses().items():
+            rows, last = list_page(1, code)
+            st["status_pages"][code] = [label, last if rows else 0]
+        ctx.save()
+        log(f"procurement statuses: {st['status_pages']}")
+
+    def status_page(key):
+        code, page = key.rsplit(":", 1)
+        rows, _ = list_page(int(page), code)
+        if not rows:
+            raise RuntimeError(f"status {key}: no rows")
+        for r in rows:
+            ctx.write("procurement_status", {"id": r["id"], "status_code": code, "status": st["status_pages"][code][0]})
+
+    keys = [f"{c}:{p}" for c, (_, last) in st["status_pages"].items() for p in range(1, last + 1)]
+    ok &= ctx.run_items("status_pages", ctx.limit(keys), status_page, workers=1)
     # The list is ordered by date and keeps growing; items that moved between pages during the crawl are missed.
     # Bidder pages link procurements too; any linked id not seen in the lists is reported, not silently ignored.
     return ok
